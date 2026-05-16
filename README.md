@@ -14,6 +14,7 @@ This repo is intentionally small. It gives you a clean place to build scheduled 
 - `tests/` contains fast unit tests that do not call Google APIs.
 - `docs/google-sheets-setup.md` explains how to connect a real Sheet.
 - `docs/development-rules.md` records the project rules for future automation work.
+- `docs/workflow-reference.md` explains every Python workflow, launcher, write target, and safe-run command.
 
 ## Automation Map
 
