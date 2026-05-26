@@ -20,7 +20,8 @@ Use `automations/` for daily operation. Use `scripts/` when debugging a specific
 
 | Folder | Purpose | Safe first command | Writes |
 | --- | --- | --- | --- |
-| `10_ARM_Output` | Export ARM receivables, import to Collection, update `Collection!C1` status text | `dry_run_existing_excel.cmd path\to\file.xlsx` | Apps Script import and `Collection!C1` |
+| `05_ARM_WebApp_Doctor` | Check ARM WebApp reachability and contract matching before live jobs | `run.cmd --check all` | No sheet writes; HTTP health probes only |
+| `10_ARM_Output` | Export ARM receivables, import to Collection, update `Collection!B1` status text | `dry_run_existing_excel.cmd path\to\file.xlsx` | Apps Script import and `Collection!B1` |
 | `20_CRM_Refresh` | Refresh `CRM` from `List` using `Data_Dictionary` and CRM headers | `dry_run.cmd` | Clears/writes `CRM!A3:R` on live run |
 | `30_N1_Sales_LLM` | Generate AI action fields for `List` rows | `preview.cmd` | Writes AI columns only via `writeback.cmd` |
 | `40_Visiting_Plan` | Generate `LINE話術` and `拜訪策略` | Run with `--max-rows` first | Writes adjacent output columns in `List` |
@@ -36,7 +37,7 @@ All `.cmd` launchers are repo-relative and prefer `.venv\Scripts\python.exe` whe
 ### `scripts/arm_export_to_collection.py`
 
 Purpose:
-- Opens ARM in Edge, downloads overdue receivables Excel, parses rows, posts them to Apps Script, and updates `Collection!C1`.
+- Opens ARM in Edge, downloads overdue receivables Excel, parses rows, posts them to Apps Script, and updates `Collection!B1`.
 
 Important behavior:
 - Excel columns are resolved by header aliases, not fixed positions.
@@ -47,7 +48,7 @@ Important behavior:
 last update in yyyy/mm/dd with XXX rows
 ```
 
-to `Collection!C1` by default.
+to `Collection!B1` by default.
 
 Useful commands:
 
@@ -56,13 +57,38 @@ Useful commands:
 .\.venv\Scripts\python.exe scripts\arm_export_to_collection.py --excel C:\path\ARM.xlsx --skip-status-cell
 ```
 
+Daily automation note:
+- `automations/10_ARM_Output/run.cmd` runs `doctor_arm_webapps.py --check import` first.
+- A failed preflight prints `[WARN]` and the live import still continues.
+
 Key env vars:
 - `ARM_PASSWORD`
-- `ARM_WEBAPP_URL`
+- `ARM_IMPORT_WEBAPP_URL`, fallback to `ARM_WEBAPP_URL`
+- `ARM_REMMITER_WEBAPP_URL`, fallback to `ARM_WEBAPP_URL`
 - `ARM_WEBAPP_TOKEN`
 - `ARM_COLLECTION_SPREADSHEET_ID`, fallback to `SPREADSHEET_ID`
 - `ARM_COLLECTION_SHEET_NAME`, default `Collection`
-- `ARM_COLLECTION_STATUS_CELL`, default `C1`
+- `ARM_COLLECTION_STATUS_CELL`, default `B1`
+
+The Apps Script WebApp request/response contract is documented in `docs/arm-webapp-contract.md`, the maintenance checklist is in `docs/arm-maintenance-runbook.md`, and the local endpoint scaffold is `apps_script/61_ARM_WebApp_Endpoint.gs`.
+
+### `scripts/doctor_arm_webapps.py`
+
+Purpose:
+- Verifies the effective ARM import and AI Remmiter WebApp URLs before live automations rely on them.
+
+Useful commands:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\doctor_arm_webapps.py --check import
+.\.venv\Scripts\python.exe scripts\doctor_arm_webapps.py --check remmiter
+.\.venv\Scripts\python.exe scripts\doctor_arm_webapps.py --check all
+```
+
+Behavior:
+- `import` expects the ARM import health JSON from the WebApp root.
+- `remmiter` sends a read-only queue request and fails clearly if the endpoint is actually an import-only handler.
+- Exit code `0` means all selected checks passed; non-zero means at least one failed.
 
 ### `scripts/CRM.py`
 
@@ -208,7 +234,7 @@ When testing sheet-writing jobs:
 
 - Prefer header lookup over fixed column letters.
 - Prefer `Data_Dictionary` internal keys for `List` mappings.
-- Fixed cells are allowed only when they are intentional layout cells, such as `Collection!C1`.
+- Fixed cells are allowed only when they are intentional layout cells, such as `Collection!B1`.
 - If a script writes by column letter, it must first compute that letter from the current header row.
 - Before live writes, print or log the target range.
 

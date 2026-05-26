@@ -22,14 +22,14 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-load_dotenv(ROOT_DIR / ".env")
+load_dotenv(ROOT_DIR / ".env", override=True, encoding="utf-8-sig")
 
 ARM_LOGIN_URL = os.getenv("ARM_LOGIN_URL", "http://192.168.0.187/BPMPlus/#/passport/login")
 ARM_RECEIVABLE_URL = os.getenv("ARM_RECEIVABLE_URL", "http://192.168.0.187/BPMPlus/#/arm/armr01")
 
 ARM_ACCOUNT = os.getenv("ARM_ACCOUNT", "108010")
 ARM_PASSWORD = os.getenv("ARM_PASSWORD")
-ARM_WEBAPP_URL = os.getenv("ARM_WEBAPP_URL")
+ARM_IMPORT_WEBAPP_URL = os.getenv("ARM_IMPORT_WEBAPP_URL") or os.getenv("ARM_WEBAPP_URL")
 ARM_WEBAPP_TOKEN = os.getenv("ARM_WEBAPP_TOKEN")
 ARM_COLLECTION_SPREADSHEET_ID = (
     os.getenv("ARM_COLLECTION_SPREADSHEET_ID")
@@ -37,39 +37,97 @@ ARM_COLLECTION_SPREADSHEET_ID = (
     or os.getenv("GOOGLE_SHEET_ID")
 )
 ARM_COLLECTION_SHEET_NAME = os.getenv("ARM_COLLECTION_SHEET_NAME", "Collection")
-ARM_COLLECTION_STATUS_CELL = os.getenv("ARM_COLLECTION_STATUS_CELL", "C1")
+ARM_COLLECTION_STATUS_CELL = os.getenv("ARM_COLLECTION_STATUS_CELL", "B1")
 SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE") or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
 DOWNLOAD_DIR = Path(os.getenv("ARM_DOWNLOAD_DIR", r"C:\ARM_Downloads"))
 DEBUG_DIR = Path(os.getenv("ARM_DEBUG_DIR", r"C:\ARM_Debug"))
 
 SOURCE_COLS = [
-    "客戶名稱",
-    "發票日期",
-    "發票號碼",
-    "結帳單號",
-    "結帳單業務員",
-    "本幣應收帳款",
-    "本幣未收金額",
+    '\u5ba2\u6236\u540d\u7a31',
+    '\u767c\u7968\u65e5\u671f',
+    '\u767c\u7968\u865f\u78bc',
+    '\u7d50\u5e33\u55ae\u865f',
+    '\u7d50\u5e33\u55ae\u696d\u52d9\u54e1',
+    '\u672c\u5e63\u61c9\u6536\u5e33\u6b3e',
+    '\u672c\u5e63\u672a\u6536\u91d1\u984d',
 ]
 
 HEADER_ALIASES = {
-    "客戶名稱": ["客戶名稱", "客戶", "Customer Name"],
-    "發票日期": ["發票日期", "日期", "Invoice Date"],
-    "發票號碼": ["發票號碼", "發票編號", "Invoice No", "Invoice Number"],
-    "結帳單號": ["結帳單號", "結帳單編號", "Closing No"],
-    "結帳單業務員": ["結帳單業務員", "業務員", "Sales"],
-    "本幣應收帳款": ["本幣應收帳款", "應收帳款", "Receivable"],
-    "本幣未收金額": ["本幣未收金額", "本幣未收帳款", "未收金額", "未收帳款", "Unpaid"],
+    '\u5ba2\u6236\u540d\u7a31': [
+        '\u5ba2\u6236\u540d\u7a31',
+        '\u5ba2\u6236',
+        'Customer Name',
+        '\u6470\uff38\uf357?\uf699\u8fc2',
+        '\u6470\uff38\uf357',
+],
+    '\u767c\u7968\u65e5\u671f': [
+        '\u767c\u7968\u65e5\u671f',
+        '\u65e5\u671f',
+        'Invoice Date',
+        '?\u6f5b\u5de8?\u4ea4?',
+        '?\u4ea4?',
+],
+    '\u767c\u7968\u865f\u78bc': [
+        '\u767c\u7968\u865f\u78bc',
+        '\u767c\u7968\u7de8\u865f',
+        'Invoice No',
+        'Invoice Number',
+        '?\u6f5b\u5de8?\uee03\u2163',
+        '?\u6f5b\u5de8\u877a\u523b?',
+],
+    '\u7d50\u5e33\u55ae\u865f': [
+        '\u7d50\u5e33\u55ae\u865f',
+        '\u7d50\u5e33\u55ae\u7de8\u865f',
+        'Closing No',
+        '\u876f\ue4ce\u8463?\u682a?',
+        '\u876f\ue4ce\u8463?\u6843\u694a??',
+],
+    '\u7d50\u5e33\u55ae\u696d\u52d9\u54e1': [
+        '\u7d50\u5e33\u55ae\u696d\u52d9\u54e1',
+        '\u696d\u52d9\u54e1',
+        'Sales',
+        '\u876f\ue4ce\u8463?\u683c\u5e73?\uea53\ue661',
+        '\u7486\u5256???',
+],
+    '\u672c\u5e63\u61c9\u6536\u5e33\u6b3e': [
+        '\u672c\u5e63\u61c9\u6536\u5e33\u6b3e',
+        '\u61c9\u6536\u5e33\u6b3e',
+        'Receivable',
+        '?\u780d\u99b3?\uf424\ue713\u64a3\u55ae\u72e1',
+        '?\uf424\ue713\u64a3\u55ae\u72e1',
+],
+    '\u672c\u5e63\u672a\u6536\u91d1\u984d': [
+        '\u672c\u5e63\u672a\u6536\u91d1\u984d',
+        '\u672c\u5e63\u672a\u6536\u5e33\u6b3e',
+        '\u672a\u6536\u91d1\u984d',
+        '\u672a\u6536\u5e33\u6b3e',
+        'Unpaid',
+        '?\u780d\u99b3?\u82a3\ue713?\ue56f?',
+        '?\u780d\u99b3?\u82a3\ue713\u64a3\u55ae\u72e1',
+        '?\u82a3\ue713?\ue56f?',
+        '?\u82a3\ue713\u64a3\u55ae\u72e1',
+],
 }
 
+
+ARM_WEBAPP_ROW_FIELDS = [
+    "customer_name",
+    "invoice_date",
+    "invoice_number",
+    "closing_number",
+    "sales",
+    "receivable_amount",
+    "unpaid_amount",
+]
+ARM_CLOSING_NO_PATTERN = re.compile(r"^61\d{2}-\d{10}$")
 
 def require_env(needs_browser: bool, needs_post: bool, needs_status_cell: bool) -> None:
     missing = []
     if needs_browser and not ARM_PASSWORD:
         missing.append("ARM_PASSWORD")
-    if needs_post and not ARM_WEBAPP_URL:
-        missing.append("ARM_WEBAPP_URL")
+    if needs_post and not ARM_IMPORT_WEBAPP_URL:
+        missing.append("ARM_IMPORT_WEBAPP_URL or ARM_WEBAPP_URL")
     if needs_post and not ARM_WEBAPP_TOKEN:
         missing.append("ARM_WEBAPP_TOKEN")
     if needs_status_cell and not ARM_COLLECTION_SPREADSHEET_ID:
@@ -352,7 +410,7 @@ def parse_excel_rows(file_path: Path) -> list[list[str]]:
             row.append(str(value).strip())
 
         closing_no = row[3]
-        if re.match(r"^61\d{2}-\d{10}$", closing_no):
+        if ARM_CLOSING_NO_PATTERN.match(closing_no):
             rows.append(row)
 
     if not rows:
@@ -363,11 +421,55 @@ def parse_excel_rows(file_path: Path) -> list[list[str]]:
     return rows
 
 
+def validate_arm_webapp_rows(rows: Any) -> list[list[str]]:
+    if not isinstance(rows, list):
+        raise ValueError("ARM WebApp rows must be a list.")
+    if not rows:
+        raise ValueError("ARM WebApp rows must contain at least one row.")
+
+    for row_number, row in enumerate(rows, start=1):
+        if not isinstance(row, list):
+            raise ValueError(f"ARM WebApp row {row_number} must be a list.")
+        if len(row) != len(ARM_WEBAPP_ROW_FIELDS):
+            raise ValueError(
+                f"ARM WebApp row {row_number} must have {len(ARM_WEBAPP_ROW_FIELDS)} cells "
+                f"({', '.join(ARM_WEBAPP_ROW_FIELDS)}); got {len(row)}."
+            )
+        non_strings = [field for field, value in zip(ARM_WEBAPP_ROW_FIELDS, row) if not isinstance(value, str)]
+        if non_strings:
+            raise ValueError(f"ARM WebApp row {row_number} has non-string cells: {', '.join(non_strings)}.")
+        closing_number = row[ARM_WEBAPP_ROW_FIELDS.index("closing_number")].strip()
+        if not ARM_CLOSING_NO_PATTERN.match(closing_number):
+            raise ValueError(
+                f"ARM WebApp row {row_number} has invalid closing_number {closing_number!r}; "
+                "expected ^61\\d{2}-\\d{10}$."
+            )
+    return rows
+
+
+def build_arm_webapp_payload(rows: list[list[str]], token: str | None = None) -> dict[str, Any]:
+    webapp_token = ARM_WEBAPP_TOKEN if token is None else token
+    if not webapp_token:
+        raise ValueError("ARM WebApp token is required.")
+    return {
+        "token": webapp_token,
+        "rows": validate_arm_webapp_rows(rows),
+    }
+
+
+def parse_arm_webapp_response(result: Any) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        raise RuntimeError("Apps Script response must be a JSON object.")
+    if not result.get("ok"):
+        raise RuntimeError("Apps Script error: " + str(result.get("error")))
+    return result
+
+
 def post_rows_to_apps_script(rows: list[list[str]]) -> dict[str, Any]:
     print("[STEP] Send rows to Apps Script")
-    payload = {"token": ARM_WEBAPP_TOKEN, "rows": rows}
+    payload = build_arm_webapp_payload(rows)
     response = requests.post(
-        ARM_WEBAPP_URL,
+        ARM_IMPORT_WEBAPP_URL,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={"Content-Type": "application/json; charset=utf-8"},
         timeout=120,
@@ -376,10 +478,7 @@ def post_rows_to_apps_script(rows: list[list[str]]) -> dict[str, Any]:
     print("[HTTP]", response.status_code)
     safe_print(response.text[:1000])
     response.raise_for_status()
-    result = response.json()
-    if not result.get("ok"):
-        raise RuntimeError("Apps Script error: " + str(result.get("error")))
-    return result
+    return parse_arm_webapp_response(response.json())
 
 
 def build_collection_update_sentence(row_count: int, updated_on: date | None = None) -> str:
@@ -438,7 +537,7 @@ def main() -> None:
     require_env(
         needs_browser=args.excel is None,
         needs_post=not args.dry_run,
-        needs_status_cell=not args.dry_run and not args.skip_status_cell,
+        needs_status_cell=False,
     )
     file_path = args.excel or download_from_arm()
     rows = parse_excel_rows(file_path)
@@ -454,10 +553,16 @@ def main() -> None:
 
     result = post_rows_to_apps_script(rows)
     if not args.skip_status_cell:
-        result["statusText"] = update_collection_status_cell(len(rows))
+        try:
+            result["statusText"] = update_collection_status_cell(len(rows))
+        except Exception as err:
+            result["statusTextError"] = str(err)
+            print("[WARN] Collection status cell update failed; import already succeeded.")
+            safe_print(str(err))
     print("[DONE] ARM Excel imported to Collection.")
     safe_print(json.dumps(result, ensure_ascii=True, indent=2)[:3000])
 
 
 if __name__ == "__main__":
     main()
+
