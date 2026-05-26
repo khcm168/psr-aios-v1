@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import mimetypes
 import os
 import re
 import sys
 import time
+from datetime import date
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
 import requests
+from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.by import By
@@ -18,6 +23,9 @@ from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(ROOT_DIR / ".env", override=True, encoding="utf-8-sig")
 
 ARM_LOGIN_URL = os.getenv("ARM_LOGIN_URL", "http://192.168.0.187/BPMPlus/#/passport/login")
 ARM_RECEIVABLE_URL = os.getenv("ARM_RECEIVABLE_URL", "http://192.168.0.187/BPMPlus/#/arm/armr01")
@@ -28,11 +36,18 @@ ARM_REMMITER_WEBAPP_URL = os.getenv("ARM_REMMITER_WEBAPP_URL") or os.getenv("ARM
 ARM_WEBAPP_TOKEN = os.getenv("ARM_WEBAPP_TOKEN")
 ARM_BROWSER = os.getenv("ARM_BROWSER", "edge").strip().lower()
 
+DOWNLOAD_DIR = Path(os.getenv("ARM_DOWNLOAD_DIR", r"C:\ARM_Downloads"))
 DEBUG_DIR = Path(os.getenv("ARM_DEBUG_DIR", r"C:\ARM_Debug"))
+GMAIL_TOKEN_FILE = Path(os.getenv("GMAIL_TOKEN_FILE", str(ROOT_DIR / "secrets" / "gmail-token.json")))
+PAYMENT_INFO_DRAFT_TO = os.getenv("ARM_PAYMENT_INFO_DRAFT_TO", "khcm168@gmail.com")
 
 ACTION_GET_QUEUE = "getAiRemmiterQueue"
 ACTION_RECORD_RESULTS = "recordAiRemmiterResults"
 CLOSING_NO_RE = re.compile(r"^61\d{2}-\d{10}$")
+DOWNLOAD_SUFFIXES = {".xls", ".xlsx"}
+PARTIAL_DOWNLOAD_SUFFIXES = {".crdownload", ".tmp"}
+PAYMENT_INFO_EXPORT_TEXT = "\u6536\u6b3e\u8cc7\u8a0a\u532f\u51fa"
+SEARCH_TEXT = "\u641c\u5c0b"
 
 
 def safe_print(*values: Any) -> None:
@@ -57,16 +72,28 @@ def require_env(needs_browser: bool, needs_post: bool) -> None:
 
 
 def setup_driver():
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
     DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
     if ARM_BROWSER == "chrome":
         options = ChromeOptions()
         options.add_argument("--start-maximized")
+        options.add_experimental_option("prefs", download_preferences())
         return webdriver.Chrome(options=options)
 
     options = EdgeOptions()
     options.add_argument("--start-maximized")
+    options.add_experimental_option("prefs", download_preferences())
     return webdriver.Edge(options=options)
+
+
+def download_preferences() -> dict[str, Any]:
+    return {
+        "download.default_directory": str(DOWNLOAD_DIR),
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "safebrowsing.enabled": True,
+    }
 
 
 def save_debug(driver, name: str) -> None:
@@ -298,7 +325,7 @@ def open_arm_receivables(driver, wait: WebDriverWait) -> None:
     safe_print("[STEP] Open ARM receivables page")
     driver.get(ARM_RECEIVABLE_URL)
     wait_document_ready(driver)
-    time.sleep(4)
+    time.sleep(0.5)
     save_debug(driver, "ai_remmiter_armr01")
 
     detail_xpath = (
@@ -325,7 +352,7 @@ def open_arm_receivables(driver, wait: WebDriverWait) -> None:
 
     safe_print("[STEP] Click \u9ede\u6211\u89c0\u770b\u660e\u7d30")
     click_first(driver, wait, [detail_xpath], "\u9ede\u6211\u89c0\u770b\u660e\u7d30")
-    time.sleep(5)
+    time.sleep(2.5)
     save_debug(driver, "ai_remmiter_after_click_detail")
     safe_print("[OK] Detail clicked")
 
@@ -342,6 +369,255 @@ def click_search(driver, wait: WebDriverWait) -> None:
         ],
         "search button",
     )
+
+
+def clear_download_folder(download_dir: Path = DOWNLOAD_DIR) -> None:
+    download_dir.mkdir(parents=True, exist_ok=True)
+    for file_path in download_dir.iterdir():
+        if file_path.is_file() and file_path.suffix.lower() in DOWNLOAD_SUFFIXES | PARTIAL_DOWNLOAD_SUFFIXES:
+            file_path.unlink()
+
+
+def latest_completed_download(download_dir: Path = DOWNLOAD_DIR) -> Path | None:
+    if not download_dir.exists():
+        return None
+    downloads = sorted(
+        [
+            file_path
+            for file_path in download_dir.iterdir()
+            if file_path.is_file() and file_path.suffix.lower() in DOWNLOAD_SUFFIXES
+        ],
+        key=lambda file_path: file_path.stat().st_mtime,
+        reverse=True,
+    )
+    return downloads[0] if downloads else None
+
+
+def has_partial_downloads(download_dir: Path = DOWNLOAD_DIR) -> bool:
+    if not download_dir.exists():
+        return False
+    return any(
+        file_path.is_file() and file_path.suffix.lower() in PARTIAL_DOWNLOAD_SUFFIXES
+        for file_path in download_dir.iterdir()
+    )
+
+
+def wait_for_download(download_dir: Path = DOWNLOAD_DIR, timeout_seconds: int = 120) -> Path:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        latest_download = latest_completed_download(download_dir)
+        if latest_download is not None and not has_partial_downloads(download_dir):
+            safe_print("[OK] Downloaded:", latest_download)
+            return latest_download
+        time.sleep(1)
+    raise TimeoutError(f"Excel download did not finish within {timeout_seconds} seconds.")
+
+
+def choose_button_three_left(toolbar_buttons: list[Any], search_button: Any) -> Any:
+    try:
+        search_index = next(
+            index
+            for index, button in enumerate(toolbar_buttons)
+            if button is search_button or button == search_button
+        )
+    except StopIteration as exc:
+        raise RuntimeError("Search button was not found in the visible toolbar button list.") from exc
+
+    export_index = search_index - 3
+    if export_index < 0:
+        raise RuntimeError("Could not find the toolbar button three positions left of search.")
+    return toolbar_buttons[export_index]
+
+
+def find_search_button(driver, wait: WebDriverWait):
+    def find_clickable_search(current_driver):
+        for xpath in [
+            f"//button[contains(normalize-space(.), '{SEARCH_TEXT}')]",
+            f"//span[contains(normalize-space(.), '{SEARCH_TEXT}')]/ancestor::button[1]",
+            f"//*[@role='button' and contains(normalize-space(.), '{SEARCH_TEXT}')]",
+            f"//*[contains(@class, 'btn') and contains(normalize-space(.), '{SEARCH_TEXT}')]",
+        ]:
+            element = visible_enabled(current_driver.find_elements(By.XPATH, xpath))
+            if element is not None:
+                return element
+        return False
+
+    return wait.until(find_clickable_search, message="Could not find clickable search button")
+
+
+def visible_toolbar_buttons_near(driver, anchor_button) -> list[Any]:
+    anchor_rect = anchor_button.rect or {}
+    anchor_center_y = float(anchor_rect.get("y", 0)) + float(anchor_rect.get("height", 0)) / 2
+    y_tolerance = max(24.0, float(anchor_rect.get("height", 0)) * 0.8)
+    candidates = []
+    seen = set()
+
+    for element in driver.find_elements(By.XPATH, "//button | //*[@role='button'] | //a"):
+        try:
+            if not element.is_displayed() or not element.is_enabled():
+                continue
+            element_id = getattr(element, "id", None)
+            if element_id and element_id in seen:
+                continue
+            rect = element.rect or {}
+            width = float(rect.get("width", 0))
+            height = float(rect.get("height", 0))
+            if width <= 0 or height <= 0:
+                continue
+            center_y = float(rect.get("y", 0)) + height / 2
+            if abs(center_y - anchor_center_y) > y_tolerance:
+                continue
+            candidates.append((float(rect.get("x", 0)), element))
+            if element_id:
+                seen.add(element_id)
+        except StaleElementReferenceException:
+            return visible_toolbar_buttons_near(driver, anchor_button)
+        except Exception:
+            continue
+
+    candidates.sort(key=lambda item: item[0])
+    return [element for _, element in candidates]
+
+
+def click_payment_info_export(driver, wait: WebDriverWait) -> None:
+    safe_print("[STEP] Click", PAYMENT_INFO_EXPORT_TEXT)
+    clear_download_folder()
+    search_button = find_search_button(driver, wait)
+    toolbar_buttons = visible_toolbar_buttons_near(driver, search_button)
+    export_button = choose_button_three_left(toolbar_buttons, search_button)
+    export_text = " ".join(str(export_button.text or "").split())
+    if export_text and PAYMENT_INFO_EXPORT_TEXT not in export_text:
+        raise RuntimeError(
+            f"Expected toolbar button three positions left of search to contain "
+            f"{PAYMENT_INFO_EXPORT_TEXT!r}; got {export_text!r}."
+        )
+
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", export_button)
+    time.sleep(0.2)
+    try:
+        export_button.click()
+    except Exception:
+        driver.execute_script("arguments[0].click();", export_button)
+    safe_print("[OK]", PAYMENT_INFO_EXPORT_TEXT, "clicked")
+
+
+def wait_for_payment_info_export_dialog(driver, wait: WebDriverWait):
+    def find_date_dialog(current_driver):
+        for dialog in reversed(find_visible_dialogs(current_driver)):
+            try:
+                if not dialog.is_displayed():
+                    continue
+                visible_date_fields = []
+                for field in dialog.find_elements(
+                    By.XPATH,
+                    ".//input[not(@type='hidden') and not(@disabled)]"
+                    " | .//textarea[not(@disabled)]"
+                    " | .//*[contains(normalize-space(.), '\u65e5\u671f')]",
+                ):
+                    try:
+                        if field.is_displayed():
+                            visible_date_fields.append(field)
+                    except Exception:
+                        continue
+                if visible_date_fields:
+                    return dialog
+            except Exception:
+                continue
+        return False
+
+    return wait.until(find_date_dialog, message="Payment info export date dialog did not appear")
+
+
+def confirm_payment_info_export_dialog(driver, wait: WebDriverWait) -> None:
+    wait_for_payment_info_export_dialog(driver, wait)
+    click_dialog_ok(driver, wait, "payment info export date dialog")
+    safe_print("[OK] Payment info export date dialog confirmed")
+
+
+def build_payment_info_export_message(downloaded_path: Path, to_address: str, exported_on: date | None = None) -> EmailMessage:
+    export_day = exported_on or date.today()
+    message = EmailMessage()
+    message["To"] = to_address
+    message["Subject"] = f"ARM 收款資訊匯出 {export_day.strftime('%Y/%m/%d')}"
+    message.set_content(
+        "\n".join(
+            [
+                "Attached is the ARM 收款資訊匯出 file.",
+                "",
+                f"Export date: {export_day.strftime('%Y/%m/%d')}",
+                f"Local file: {downloaded_path}",
+            ]
+        )
+    )
+
+    content_type, _ = mimetypes.guess_type(str(downloaded_path))
+    if content_type:
+        maintype, subtype = content_type.split("/", 1)
+    else:
+        maintype, subtype = "application", "octet-stream"
+    message.add_attachment(
+        downloaded_path.read_bytes(),
+        maintype=maintype,
+        subtype=subtype,
+        filename=downloaded_path.name,
+    )
+    return message
+
+
+def encode_gmail_raw_message(message: EmailMessage) -> str:
+    return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+
+
+def create_gmail_draft_with_attachment(downloaded_path: Path, to_address: str = PAYMENT_INFO_DRAFT_TO) -> dict[str, Any]:
+    token_file = GMAIL_TOKEN_FILE.expanduser()
+    if not token_file.is_absolute():
+        token_file = ROOT_DIR / token_file
+
+    if not token_file.exists():
+        raise RuntimeError(
+            "Missing Gmail OAuth token file: "
+            + str(token_file)
+            + ". Set GMAIL_TOKEN_FILE to a Gmail user OAuth token JSON with gmail.compose scope."
+        )
+
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+
+    credentials = Credentials.from_authorized_user_file(
+        str(token_file),
+        scopes=["https://www.googleapis.com/auth/gmail.compose"],
+    )
+    service = build("gmail", "v1", credentials=credentials)
+    message = build_payment_info_export_message(downloaded_path, to_address)
+    draft = (
+        service.users()
+        .drafts()
+        .create(userId="me", body={"message": {"raw": encode_gmail_raw_message(message)}})
+        .execute()
+    )
+    safe_print("[OK] Gmail draft created:", draft.get("id"), "to", to_address)
+    return draft
+
+
+def dry_test_payment_info_export(create_draft: bool = False, draft_to: str = PAYMENT_INFO_DRAFT_TO) -> Path:
+    driver = setup_driver()
+    wait = WebDriverWait(driver, 30)
+    try:
+        login_arm(driver, wait)
+        open_arm_receivables(driver, wait)
+        save_debug(driver, "payment_info_export_before_click")
+        click_payment_info_export(driver, wait)
+        time.sleep(1)
+        save_debug(driver, "payment_info_export_dialog")
+        confirm_payment_info_export_dialog(driver, wait)
+        downloaded_path = wait_for_download()
+        save_debug(driver, "payment_info_export_download_confirmed")
+        safe_print("[OK] Downloaded payment info export:", downloaded_path)
+        if create_draft:
+            create_gmail_draft_with_attachment(downloaded_path, draft_to)
+        return downloaded_path
+    finally:
+        driver.quit()
 
 
 def fill_closing_no(driver, wait: WebDriverWait, closing_no: str) -> None:
@@ -782,9 +1058,32 @@ def select_items(queue: dict[str, Any], limit: int | None) -> list[dict[str, Any
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run ARM AI Remmiter searches from checked Collection!U groups.")
     parser.add_argument("--dry-run", action="store_true", help="Fetch and print the queue without opening ARM.")
+    parser.add_argument(
+        "--dry-test-payment-info-export",
+        action="store_true",
+        help="Open ARM, click the payment info export toolbar button, confirm the default date, and report the download.",
+    )
+    parser.add_argument(
+        "--draft-payment-info-export-email",
+        action="store_true",
+        help="After --dry-test-payment-info-export downloads the Excel file, create a Gmail draft with the file attached.",
+    )
+    parser.add_argument(
+        "--draft-to",
+        default=PAYMENT_INFO_DRAFT_TO,
+        help=f"Gmail draft recipient for the payment info export attachment. Default: {PAYMENT_INFO_DRAFT_TO}",
+    )
     parser.add_argument("--limit", type=int, help="Process only the first N checked groups.")
     parser.add_argument("--skip-post-results", action="store_true", help="Do not write final TRUE/FALSE results back to Collection!U.")
     args = parser.parse_args()
+
+    if args.dry_test_payment_info_export:
+        require_env(needs_browser=True, needs_post=False)
+        dry_test_payment_info_export(
+            create_draft=args.draft_payment_info_export_email,
+            draft_to=args.draft_to,
+        )
+        return
 
     require_env(needs_browser=not args.dry_run, needs_post=True)
     queue = fetch_queue()
