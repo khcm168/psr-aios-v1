@@ -89,7 +89,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--company", default=None, help="Override company visible text or option value.")
     parser.add_argument("--customer-name", default=None, help="Override customerName. Default: 中崙")
-    parser.add_argument("--browser", choices=["chrome", "edge"], default="chrome")
+    parser.add_argument("--browser", choices=["chrome", "edge"], default="edge")
     parser.add_argument(
         "--from-sheet-v",
         action="store_true",
