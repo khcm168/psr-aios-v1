@@ -1,15 +1,19 @@
 import tempfile
 import time
 import unittest
+from datetime import date
 from email.message import EmailMessage
 from pathlib import Path
 
 from scripts.collection_ai_remmiter import (
+    build_collection_u_status,
     build_payment_info_export_message,
+    build_single_step_post_result,
     choose_button_three_left,
     encode_gmail_raw_message,
     has_partial_downloads,
     latest_completed_download,
+    mark_step_collection_u_status,
 )
 
 
@@ -66,6 +70,39 @@ class CollectionAiRemmiterExportTest(unittest.TestCase):
         self.assertIsInstance(encoded, str)
         self.assertNotIn("+", encoded)
         self.assertNotIn("/", encoded)
+
+    def test_collection_u_status_uses_mmdd_post_office_wording(self):
+        self.assertEqual(build_collection_u_status(date(2026, 5, 29)), "05/29開始郵局匯款作業")
+
+    def test_mark_step_collection_u_status_adds_backend_friendly_fields(self):
+        result = {"ok": True}
+
+        mark_step_collection_u_status(result, date(2026, 5, 29))
+
+        self.assertEqual(result["message"], "05/29開始郵局匯款作業")
+        self.assertEqual(result["collectionUText"], "05/29開始郵局匯款作業")
+        self.assertEqual(result["statusText"], "05/29開始郵局匯款作業")
+        self.assertEqual(result["collectionUValue"], "05/29開始郵局匯款作業")
+
+    def test_single_step_post_result_targets_one_collection_row(self):
+        item = {"groupType": "cashSolo", "invoiceNo": "AB12345678"}
+        step_result = {
+            "stepType": "cash",
+            "rowNumber": 17,
+            "closingNo": "6101-2605290001",
+            "ok": True,
+            "message": "05/29開始郵局匯款作業",
+            "collectionUText": "05/29開始郵局匯款作業",
+            "statusText": "05/29開始郵局匯款作業",
+            "collectionUValue": "05/29開始郵局匯款作業",
+        }
+
+        post_result = build_single_step_post_result(item, step_result)
+
+        self.assertEqual(post_result["rowNumbers"], [17])
+        self.assertEqual(post_result["closingNumbers"], ["6101-2605290001"])
+        self.assertEqual(post_result["steps"], [step_result])
+        self.assertEqual(post_result["collectionUText"], "05/29開始郵局匯款作業")
 
 
 if __name__ == "__main__":

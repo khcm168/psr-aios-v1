@@ -1,168 +1,211 @@
-/**
- * ARM Collection import WebApp endpoint.
- *
- * Expected POST body:
- * {
- *   "token": "<shared secret matching ScriptProperties.ARM_WEBAPP_TOKEN>",
- *   "rows": [
- *     [
- *       "customer_name",
- *       "invoice_date",
- *       "invoice_number",
- *       "closing_number",
- *       "sales",
- *       "receivable_amount",
- *       "unpaid_amount"
- *     ]
- *   ]
- * }
- *
- * Success response:
- * {"ok": true, "rows": 1, "sheetName": "Collection", "writeRange": "A3:G3"}
- *
- * Error response:
- * {"ok": false, "error": "..."}
- *
- * This endpoint rewrites only the Collection data body. Collection!B1 is
- * intentionally updated by scripts/arm_export_to_collection.py after import.
- */
+const ARM_WEBAPP_CFG = {
+  tokenPropertyName: 'ARM_WEBAPP_TOKEN',
+  sheetName: 'Collection',
+  headerRow: 2,
+  startRow: 3,
+  startCol: 2, // B
+  statusCol: 9, // I
+  sourceCols: 7,
+  maxRows: 5000,
+  logSheetName: 'LOG'
+};
 
-var ARM_ROW_FIELDS = [
-  "customer_name",
-  "invoice_date",
-  "invoice_number",
-  "closing_number",
-  "sales",
-  "receivable_amount",
-  "unpaid_amount"
-];
-
-var ARM_ROW_WIDTH = ARM_ROW_FIELDS.length;
-var ARM_CLOSING_NUMBER_INDEX = 3;
-var ARM_CLOSING_NUMBER_PATTERN = /^61\d{2}-\d{10}$/;
-
-var ARM_WEBAPP_TOKEN_PROPERTY = "ARM_WEBAPP_TOKEN";
-var ARM_COLLECTION_SPREADSHEET_ID_PROPERTY = "ARM_COLLECTION_SPREADSHEET_ID";
-var ARM_COLLECTION_SHEET_NAME_PROPERTY = "ARM_COLLECTION_SHEET_NAME";
-var ARM_COLLECTION_DATA_START_ROW_PROPERTY = "ARM_COLLECTION_DATA_START_ROW";
-var ARM_COLLECTION_DATA_START_COLUMN_PROPERTY = "ARM_COLLECTION_DATA_START_COLUMN";
-var ARM_COLLECTION_CLEAR_COLUMNS_PROPERTY = "ARM_COLLECTION_CLEAR_COLUMNS";
+function doGet() {
+  return createArmWebAppJsonResponse_({
+    ok: true,
+    message: 'ARM Collection import endpoint is available.'
+  });
+}
 
 function doPost(e) {
   try {
-    var payload = parseRequest_(e);
-    validateToken_(payload.token);
-    var rows = validateRows_(payload.rows);
-    var writeResult = replaceCollectionRows_(rows);
+    const payload = parseArmWebAppPayload_(e);
+    assertArmWebAppToken_(payload.token);
 
-    return jsonResponse_({
+    if (payload.action === 'getAiRemmiterQueue') {
+      return createArmWebAppJsonResponse_({
+        ok: true,
+        message: 'AI Remmiter queue fetched.',
+        result: getCollectionAiRemmiterQueue()
+      });
+    }
+
+    if (payload.action === 'recordAiRemmiterResults') {
+      return createArmWebAppJsonResponse_({
+        ok: true,
+        message: 'AI Remmiter results recorded.',
+        result: recordCollectionAiRemmiterResults(payload.results)
+      });
+    }
+
+    const rows = validateArmWebAppRows_(payload.rows);
+    const result = updateArmCollectionReceivablesFromRows(rows);
+
+    return createArmWebAppJsonResponse_({
       ok: true,
-      rows: rows.length,
-      sheetName: writeResult.sheetName,
-      writeRange: writeResult.writeRange
+      message: 'ARM rows imported into Collection.',
+      result: result
     });
-  } catch (error) {
-    return jsonResponse_({
+  } catch (err) {
+    return createArmWebAppJsonResponse_({
       ok: false,
-      error: String(error && error.message ? error.message : error)
+      error: String(err && err.message ? err.message : err)
     });
   }
 }
+function updateArmCollectionReceivablesFromRows(rows) {
+  const cfg = ARM_WEBAPP_CFG;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(cfg.sheetName);
+  if (!sheet) throw new Error('Missing sheet: ' + cfg.sheetName);
 
-function parseRequest_(e) {
-  if (!e || !e.postData || !e.postData.contents) {
-    throw new Error("Missing JSON POST body.");
-  }
-  try {
-    return JSON.parse(e.postData.contents);
-  } catch (error) {
-    throw new Error("Invalid JSON POST body.");
-  }
-}
+  const normalizedRows = validateArmWebAppRows_(rows);
+  const previousLastRow = sheet.getLastRow();
+  const previousRowCount = Math.max(previousLastRow - cfg.startRow + 1, 0);
+  const previousValues = previousRowCount
+    ? sheet.getRange(cfg.startRow, cfg.startCol, previousRowCount, cfg.sourceCols + 1).getValues()
+    : [];
+  const statusByKey = buildArmCollectionStatusIndex_(previousValues);
+  const statuses = normalizedRows.map(function(row) {
+    return [statusByKey[getArmCollectionRowKey_(row)] || ''];
+  });
+  const clearRows = Math.max(previousRowCount, normalizedRows.length, 1);
 
-function validateToken_(token) {
-  var expected = getRequiredScriptProperty_(ARM_WEBAPP_TOKEN_PROPERTY);
-  if (!token || token !== expected) {
-    throw new Error("Invalid token");
-  }
-}
+  sheet.getRange(cfg.startRow, cfg.startCol, clearRows, cfg.sourceCols).clearContent();
+  sheet.getRange(cfg.startRow, cfg.statusCol, clearRows, 1).clearContent();
 
-function validateRows_(rows) {
-  if (!Array.isArray(rows) || rows.length === 0) {
-    throw new Error("rows must be a non-empty array.");
+  if (normalizedRows.length) {
+    sheet.getRange(cfg.startRow, cfg.startCol, normalizedRows.length, cfg.sourceCols).setValues(normalizedRows);
+    sheet.getRange(cfg.startRow, cfg.statusCol, statuses.length, 1).setValues(statuses);
   }
 
-  rows.forEach(function(row, rowIndex) {
-    if (!Array.isArray(row)) {
-      throw new Error("row " + (rowIndex + 1) + " must be an array.");
-    }
-    if (row.length !== ARM_ROW_WIDTH) {
-      throw new Error("row " + (rowIndex + 1) + " must have " + ARM_ROW_WIDTH + " cells.");
-    }
-    row.forEach(function(value, columnIndex) {
-      if (typeof value !== "string") {
-        throw new Error(
-          "row " + (rowIndex + 1) + " field " + ARM_ROW_FIELDS[columnIndex] + " must be a string."
-        );
-      }
-    });
-    if (!ARM_CLOSING_NUMBER_PATTERN.test(row[ARM_CLOSING_NUMBER_INDEX].trim())) {
-      throw new Error("row " + (rowIndex + 1) + " has invalid closing_number.");
-    }
+  if (typeof applyCollectionStatusSyncStatusValidation_ === 'function') {
+    applyCollectionStatusSyncStatusValidation_(sheet);
+  }
+
+  const preservedStatusCount = statuses.filter(function(row) {
+    return toArmWebAppText_(row[0]);
+  }).length;
+
+  appendArmWebAppLog_({
+    importedRows: normalizedRows.length,
+    previousRows: previousRowCount,
+    preservedStatusCount: preservedStatusCount,
+    firstKey: normalizedRows.length ? getArmCollectionRowKey_(normalizedRows[0]) : ''
   });
 
-  return rows;
-}
-
-function replaceCollectionRows_(rows) {
-  var spreadsheetId = getOptionalScriptProperty_(ARM_COLLECTION_SPREADSHEET_ID_PROPERTY);
-  var spreadsheet = spreadsheetId
-    ? SpreadsheetApp.openById(spreadsheetId)
-    : SpreadsheetApp.getActiveSpreadsheet();
-  if (!spreadsheet) {
-    throw new Error("No active spreadsheet. Set ScriptProperties.ARM_COLLECTION_SPREADSHEET_ID.");
-  }
-
-  var sheetName = getOptionalScriptProperty_(ARM_COLLECTION_SHEET_NAME_PROPERTY) || "Collection";
-  var sheet = spreadsheet.getSheetByName(sheetName);
-  if (!sheet) {
-    throw new Error("Sheet not found: " + sheetName);
-  }
-
-  var startRow = Number(getOptionalScriptProperty_(ARM_COLLECTION_DATA_START_ROW_PROPERTY) || 3);
-  var startColumn = Number(getOptionalScriptProperty_(ARM_COLLECTION_DATA_START_COLUMN_PROPERTY) || 1);
-  var clearColumns = Number(getOptionalScriptProperty_(ARM_COLLECTION_CLEAR_COLUMNS_PROPERTY) || ARM_ROW_WIDTH);
-  var clearRows = Math.max(sheet.getLastRow() - startRow + 1, rows.length, 1);
-
-  sheet.getRange(startRow, startColumn, clearRows, clearColumns).clearContent();
-
-  var writeRange = "";
-  if (rows.length > 0) {
-    var range = sheet.getRange(startRow, startColumn, rows.length, ARM_ROW_WIDTH);
-    range.setValues(rows);
-    writeRange = range.getA1Notation();
-  }
-
   return {
-    sheetName: sheetName,
-    writeRange: writeRange
+    importedRows: normalizedRows.length,
+    previousRows: previousRowCount,
+    preservedStatusCount: preservedStatusCount,
+    clearedRows: clearRows
   };
 }
 
-function getRequiredScriptProperty_(name) {
-  var value = getOptionalScriptProperty_(name);
-  if (!value) {
-    throw new Error("Missing ScriptProperties." + name);
+function rotateArmWebAppToken() {
+  const token = Utilities.getUuid() + '-' + Utilities.getUuid();
+  PropertiesService.getScriptProperties().setProperty(ARM_WEBAPP_CFG.tokenPropertyName, token);
+  Logger.log('New ARM_WEBAPP_TOKEN: ' + token);
+  return token;
+}
+
+function parseArmWebAppPayload_(e) {
+  if (!e || !e.postData || !e.postData.contents) {
+    throw new Error('Missing POST body.');
   }
-  return value;
+  return JSON.parse(e.postData.contents || '{}');
 }
 
-function getOptionalScriptProperty_(name) {
-  return PropertiesService.getScriptProperties().getProperty(name);
+function assertArmWebAppToken_(actualToken) {
+  const expectedToken = PropertiesService
+    .getScriptProperties()
+    .getProperty(ARM_WEBAPP_CFG.tokenPropertyName);
+
+  if (!expectedToken) {
+    throw new Error('Missing Script Property: ' + ARM_WEBAPP_CFG.tokenPropertyName);
+  }
+
+  if (!actualToken || actualToken !== expectedToken) {
+    throw new Error('Unauthorized: invalid token.');
+  }
 }
 
-function jsonResponse_(body) {
+function validateArmWebAppRows_(rows) {
+  const cfg = ARM_WEBAPP_CFG;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error('payload.rows must be a non-empty 2D array.');
+  }
+  if (rows.length > cfg.maxRows) {
+    throw new Error('Too many rows: ' + rows.length);
+  }
+
+  return rows.map(function(row, i) {
+    if (!Array.isArray(row) || row.length !== cfg.sourceCols) {
+      throw new Error('Invalid row at index ' + i + '. Expected exactly 7 columns.');
+    }
+    return row.map(function(value) {
+      return toArmWebAppText_(value);
+    });
+  });
+}
+
+function buildArmCollectionStatusIndex_(previousValues) {
+  const index = {};
+  previousValues.forEach(function(row) {
+    const sourceRow = row.slice(0, ARM_WEBAPP_CFG.sourceCols);
+    const status = toArmWebAppText_(row[ARM_WEBAPP_CFG.sourceCols]);
+    const key = getArmCollectionRowKey_(sourceRow);
+    if (key && status && !index[key]) index[key] = status;
+  });
+  return index;
+}
+
+function getArmCollectionRowKey_(row) {
+  return toArmWebAppText_(row[3]);
+}
+
+function appendArmWebAppLog_(info) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let logSheet = ss.getSheetByName(ARM_WEBAPP_CFG.logSheetName);
+  if (!logSheet) logSheet = ss.insertSheet(ARM_WEBAPP_CFG.logSheetName);
+
+  if (logSheet.getLastRow() === 0) {
+    logSheet.appendRow([
+      'DateTime',
+      'Process Name',
+      'Purpose',
+      'Affected Sheets',
+      'Affected Columns',
+      'Key Variables',
+      'Maintenance Notes'
+    ]);
+  }
+
+  logSheet.appendRow([
+    new Date(),
+    'ARM WebApp Import',
+    'Import ARM Excel rows posted by local Python automation',
+    ARM_WEBAPP_CFG.sheetName + ', ' + ARM_WEBAPP_CFG.logSheetName,
+    'Collection!B:H, Collection!I:I',
+    'importedRows=' +
+      info.importedRows +
+      ', previousRows=' +
+      info.previousRows +
+      ', preservedStatusCount=' +
+      info.preservedStatusCount +
+      ', firstKey=' +
+      info.firstKey,
+    'Python performs ARM browser export; Apps Script validates and writes Collection B:H, preserving I status by closing number. Y:AF is not modified.'
+  ]);
+}
+
+function createArmWebAppJsonResponse_(payload) {
   return ContentService
-    .createTextOutput(JSON.stringify(body))
+    .createTextOutput(JSON.stringify(payload))
     .setMimeType(ContentService.MimeType.JSON);
 }
+
+function toArmWebAppText_(value) {
+  return value == null ? '' : String(value).trim();
+}
+

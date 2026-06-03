@@ -33,6 +33,7 @@ ARM_RECEIVABLE_URL = os.getenv("ARM_RECEIVABLE_URL", "http://192.168.0.187/BPMPl
 ARM_ACCOUNT = os.getenv("ARM_ACCOUNT", "108010")
 ARM_PASSWORD = os.getenv("ARM_PASSWORD")
 ARM_REMMITER_WEBAPP_URL = os.getenv("ARM_REMMITER_WEBAPP_URL") or os.getenv("ARM_WEBAPP_URL")
+ARM_REMMITER_WEBAPP_ENV_VAR = "ARM_REMMITER_WEBAPP_URL" if os.getenv("ARM_REMMITER_WEBAPP_URL") else "ARM_WEBAPP_URL"
 ARM_WEBAPP_TOKEN = os.getenv("ARM_WEBAPP_TOKEN")
 ARM_BROWSER = os.getenv("ARM_BROWSER", "edge").strip().lower()
 
@@ -48,6 +49,12 @@ DOWNLOAD_SUFFIXES = {".xls", ".xlsx"}
 PARTIAL_DOWNLOAD_SUFFIXES = {".crdownload", ".tmp"}
 PAYMENT_INFO_EXPORT_TEXT = "\u6536\u6b3e\u8cc7\u8a0a\u532f\u51fa"
 SEARCH_TEXT = "\u641c\u5c0b"
+SHORT_PAUSE_SECONDS = 0.1
+PAGE_SETTLE_SECONDS = 1.0
+SEARCH_DIALOG_SETTLE_SECONDS = 0.3
+SEARCH_RESULT_SETTLE_SECONDS = 0.8
+ROW_ACTION_SETTLE_SECONDS = 0.3
+CONFIRM_SETTLE_SECONDS = 0.6
 
 
 def safe_print(*values: Any) -> None:
@@ -116,12 +123,36 @@ def post_webapp(payload: dict[str, Any]) -> dict[str, Any]:
         headers={"Content-Type": "application/json; charset=utf-8"},
         timeout=120,
     )
-    response.raise_for_status()
-    result = response.json()
+    try:
+        result = response.json()
+    except ValueError as exc:
+        detail = (
+            f"AI Remmiter WebApp returned HTTP {response.status_code} non-JSON from "
+            f"{ARM_REMMITER_WEBAPP_ENV_VAR}. "
+        )
+        if response.status_code in {401, 403} and "<html" in response.text[:1000].lower():
+            detail += (
+                "Apps Script denied anonymous access before the remmiter JSON handler ran. "
+                "Check the Web App deployment access is set to Everyone and that the /exec URL "
+                "is from the Web App section, not the API executable URL."
+            )
+        elif response.status_code == 404 or "<html" in response.text[:1000].lower():
+            detail += (
+                "Check ARM_REMMITER_WEBAPP_URL points to a deployed Apps Script Web App "
+                "/exec URL for the remmiter endpoint; the legacy ARM_WEBAPP_URL fallback "
+                "may be missing, expired, or the wrong deployment type."
+            )
+        else:
+            detail += response.text[:300]
+        raise RuntimeError(detail) from exc
+    if response.status_code != 200:
+        raise RuntimeError(f"AI Remmiter WebApp returned HTTP {response.status_code}: {result}")
     if not result.get("ok"):
-        raise RuntimeError("Apps Script error: " + str(result.get("error")))
+        message = "Apps Script error: " + str(result.get("error"))
+        if ARM_REMMITER_WEBAPP_ENV_VAR == "ARM_WEBAPP_URL":
+            message += " Set ARM_REMMITER_WEBAPP_URL to the dedicated AI Remmiter Web App URL."
+        raise RuntimeError(message)
     return result
-
 
 def fetch_queue() -> dict[str, Any]:
     safe_print("[STEP] Fetch AI Remmiter queue")
@@ -138,6 +169,36 @@ def post_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     response = post_webapp({"action": ACTION_RECORD_RESULTS, "results": results})
     safe_print("[OK] Results recorded")
     return response.get("result") or {}
+
+
+def build_collection_u_status(today: date | None = None) -> str:
+    day = today or date.today()
+    return day.strftime("%m/%d") + "\u958b\u59cb\u90f5\u5c40\u532f\u6b3e\u4f5c\u696d"
+
+
+def mark_step_collection_u_status(result: dict[str, Any], today: date | None = None) -> None:
+    status_text = build_collection_u_status(today)
+    result["message"] = status_text
+    result["collectionUText"] = status_text
+    result["statusText"] = status_text
+    result["collectionUValue"] = status_text
+
+
+def build_single_step_post_result(item: dict[str, Any], step_result: dict[str, Any]) -> dict[str, Any]:
+    row_number = step_result.get("rowNumber")
+    closing_no = step_result.get("closingNo")
+    return {
+        "groupType": item.get("groupType"),
+        "invoiceNo": item.get("invoiceNo"),
+        "rowNumbers": [row_number] if row_number is not None else [],
+        "closingNumbers": [closing_no] if closing_no else [],
+        "ok": bool(step_result.get("ok")),
+        "message": step_result.get("message") or "",
+        "collectionUText": step_result.get("collectionUText") or step_result.get("message") or "",
+        "statusText": step_result.get("statusText") or step_result.get("message") or "",
+        "collectionUValue": step_result.get("collectionUValue") or step_result.get("message") or "",
+        "steps": [step_result],
+    }
 
 
 def wait_document_ready(driver, timeout_seconds: int = 30) -> None:
@@ -158,7 +219,7 @@ def visible_enabled(elements):
 
 def set_input_value(driver, element, value: str) -> None:
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
-    time.sleep(0.2)
+    time.sleep(SHORT_PAUSE_SECONDS)
 
     try:
         element.click()
@@ -260,7 +321,7 @@ def click_first(driver, wait: WebDriverWait, xpaths: list[str], label: str):
 
     element = wait.until(find_clickable, message=f"Could not find clickable {label}")
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
-    time.sleep(0.2)
+    time.sleep(SHORT_PAUSE_SECONDS)
     try:
         element.click()
     except Exception:
@@ -280,7 +341,7 @@ def login_arm(driver, wait: WebDriverWait) -> None:
     safe_print("[STEP] Login ARM")
     driver.get(ARM_LOGIN_URL)
     wait_document_ready(driver)
-    time.sleep(1)
+    time.sleep(0.5)
     save_debug(driver, "ai_remmiter_login_page")
 
     account_input = wait_for_editable_input(
@@ -316,7 +377,7 @@ def login_arm(driver, wait: WebDriverWait) -> None:
         ],
         "login button",
     )
-    time.sleep(4)
+    time.sleep(PAGE_SETTLE_SECONDS)
     save_debug(driver, "ai_remmiter_after_login")
     safe_print("[OK] Login submitted")
 
@@ -334,7 +395,7 @@ def open_arm_receivables(driver, wait: WebDriverWait) -> None:
     )
 
     try:
-        WebDriverWait(driver, 8).until(EC.presence_of_element_located((By.XPATH, detail_xpath)))
+        WebDriverWait(driver, 5, poll_frequency=0.2).until(EC.presence_of_element_located((By.XPATH, detail_xpath)))
     except TimeoutException:
         safe_print("[STEP] Direct route stayed on home; click ARM receivables menu")
         click_first(
@@ -347,12 +408,12 @@ def open_arm_receivables(driver, wait: WebDriverWait) -> None:
             ],
             "ARM receivables menu",
         )
-        time.sleep(5)
+        time.sleep(PAGE_SETTLE_SECONDS)
         save_debug(driver, "ai_remmiter_after_click_receivables_menu")
 
     safe_print("[STEP] Click \u9ede\u6211\u89c0\u770b\u660e\u7d30")
     click_first(driver, wait, [detail_xpath], "\u9ede\u6211\u89c0\u770b\u660e\u7d30")
-    time.sleep(2.5)
+    time.sleep(PAGE_SETTLE_SECONDS)
     save_debug(driver, "ai_remmiter_after_click_detail")
     safe_print("[OK] Detail clicked")
 
@@ -409,7 +470,7 @@ def wait_for_download(download_dir: Path = DOWNLOAD_DIR, timeout_seconds: int = 
         if latest_download is not None and not has_partial_downloads(download_dir):
             safe_print("[OK] Downloaded:", latest_download)
             return latest_download
-        time.sleep(1)
+        time.sleep(0.5)
     raise TimeoutError(f"Excel download did not finish within {timeout_seconds} seconds.")
 
 
@@ -493,7 +554,7 @@ def click_payment_info_export(driver, wait: WebDriverWait) -> None:
         )
 
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", export_button)
-    time.sleep(0.2)
+    time.sleep(SHORT_PAUSE_SECONDS)
     try:
         export_button.click()
     except Exception:
@@ -601,13 +662,13 @@ def create_gmail_draft_with_attachment(downloaded_path: Path, to_address: str = 
 
 def dry_test_payment_info_export(create_draft: bool = False, draft_to: str = PAYMENT_INFO_DRAFT_TO) -> Path:
     driver = setup_driver()
-    wait = WebDriverWait(driver, 30)
+    wait = WebDriverWait(driver, 20, poll_frequency=0.2)
     try:
         login_arm(driver, wait)
         open_arm_receivables(driver, wait)
         save_debug(driver, "payment_info_export_before_click")
         click_payment_info_export(driver, wait)
-        time.sleep(1)
+        time.sleep(PAGE_SETTLE_SECONDS)
         save_debug(driver, "payment_info_export_dialog")
         confirm_payment_info_export_dialog(driver, wait)
         downloaded_path = wait_for_download()
@@ -709,7 +770,7 @@ def click_dialog_ok(driver, wait: WebDriverWait, label: str):
 
     element = wait.until(find_button, message=f"Could not find {label} OK button")
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
-    time.sleep(0.2)
+    time.sleep(SHORT_PAUSE_SECONDS)
     try:
         element.click()
     except Exception:
@@ -748,7 +809,7 @@ def click_confirmation_only_dialog_ok(driver, wait: WebDriverWait):
 
     element = wait.until(find_button, message="Could not find confirmation-only OK button")
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
-    time.sleep(0.2)
+    time.sleep(SHORT_PAUSE_SECONDS)
     try:
         element.click()
     except Exception:
@@ -758,27 +819,27 @@ def click_confirmation_only_dialog_ok(driver, wait: WebDriverWait):
 
 def wait_for_dialogs_to_close(driver) -> None:
     try:
-        WebDriverWait(driver, 10).until(lambda current_driver: not find_visible_dialogs(current_driver))
+        WebDriverWait(driver, 5, poll_frequency=0.2).until(lambda current_driver: not find_visible_dialogs(current_driver))
     except TimeoutException:
         pass
 
 
 def click_followup_confirm(driver, item: dict[str, Any], step_name: str, closing_no: str) -> None:
-    time.sleep(0.5)
+    time.sleep(0.2)
 
     try:
-        alert = WebDriverWait(driver, 2).until(EC.alert_is_present())
+        alert = WebDriverWait(driver, 1, poll_frequency=0.2).until(EC.alert_is_present())
         save_debug(driver, debug_name(item, step_name + "_confirm_alert", closing_no))
         alert.accept()
-        time.sleep(1)
+        time.sleep(CONFIRM_SETTLE_SECONDS)
         wait_for_dialogs_to_close(driver)
         return
     except TimeoutException:
         pass
 
-    click_confirmation_only_dialog_ok(driver, WebDriverWait(driver, 10))
+    click_confirmation_only_dialog_ok(driver, WebDriverWait(driver, 6, poll_frequency=0.2))
     save_debug(driver, debug_name(item, step_name + "_confirm_ok_clicked", closing_no))
-    time.sleep(1.5)
+    time.sleep(CONFIRM_SETTLE_SECONDS)
     wait_for_dialogs_to_close(driver)
 
 
@@ -828,12 +889,12 @@ def click_row_textless_action(driver, wait: WebDriverWait, closing_no: str):
 
     element = wait.until(find_action, message=f"Could not find textless row action for {closing_no}")
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
-    time.sleep(0.2)
+    time.sleep(SHORT_PAUSE_SECONDS)
     try:
         element.click()
     except Exception:
         driver.execute_script("arguments[0].click();", element)
-    time.sleep(0.8)
+    time.sleep(ROW_ACTION_SETTLE_SECONDS)
     return element
 
 
@@ -851,7 +912,7 @@ def click_row_payment_collection(driver, wait: WebDriverWait, closing_no: str):
 
     element = wait.until(find_payment_button, message=f"Could not find row + \u6536\u6b3e button for {closing_no}")
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
-    time.sleep(0.2)
+    time.sleep(SHORT_PAUSE_SECONDS)
     try:
         element.click()
     except Exception:
@@ -905,10 +966,10 @@ def wait_for_payment_popup(driver, wait: WebDriverWait) -> None:
 
 def search_closing_no(driver, wait: WebDriverWait, closing_no: str) -> None:
     click_search(driver, wait)
-    time.sleep(0.8)
+    time.sleep(SEARCH_DIALOG_SETTLE_SECONDS)
     fill_closing_no(driver, wait, closing_no)
     click_ok(driver, wait)
-    time.sleep(2)
+    time.sleep(SEARCH_RESULT_SETTLE_SECONDS)
 
 
 def click_today_link(driver, wait: WebDriverWait) -> None:
@@ -932,9 +993,9 @@ def set_discount_return_today(driver, wait: WebDriverWait) -> None:
         date_input.click()
     except Exception:
         driver.execute_script("arguments[0].click();", date_input)
-    time.sleep(0.5)
+    time.sleep(0.2)
     click_today_link(driver, wait)
-    time.sleep(0.5)
+    time.sleep(0.2)
 
 
 def run_cash_step(driver, wait: WebDriverWait, item: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:
@@ -963,7 +1024,7 @@ def run_cash_step(driver, wait: WebDriverWait, item: dict[str, Any], step: dict[
     save_debug(driver, debug_name(item, "cash_data_ok_clicked", closing_no))
     click_followup_confirm(driver, item, "cash", closing_no)
     result["ok"] = True
-    result["message"] = "Cash amount submitted and confirmed."
+    mark_step_collection_u_status(result)
     return result
 
 
@@ -992,7 +1053,7 @@ def run_cod_step(driver, wait: WebDriverWait, item: dict[str, Any], step: dict[s
     save_debug(driver, debug_name(item, "cod_data_ok_clicked", closing_no))
     click_followup_confirm(driver, item, "cod", closing_no)
     result["ok"] = True
-    result["message"] = "COD discount return date submitted and confirmed."
+    mark_step_collection_u_status(result)
     return result
 
 
@@ -1008,7 +1069,7 @@ def debug_name(item: dict[str, Any], step_name: str, closing_no: str) -> str:
     )
 
 
-def run_group(driver, wait: WebDriverWait, item: dict[str, Any]) -> dict[str, Any]:
+def run_group(driver, wait: WebDriverWait, item: dict[str, Any], on_step_success=None) -> dict[str, Any]:
     row_numbers = list(item.get("rowNumbers") or [])
     closing_numbers = list(item.get("closingNumbers") or [])
     result = {
@@ -1028,6 +1089,8 @@ def run_group(driver, wait: WebDriverWait, item: dict[str, Any]) -> dict[str, An
             if not cash_result.get("ok"):
                 result["message"] = cash_result.get("message") or "Cash step failed."
                 return result
+            if on_step_success:
+                on_step_success(build_single_step_post_result(item, cash_result))
 
         if item.get("codStep"):
             cod_result = run_cod_step(driver, wait, item, item["codStep"])
@@ -1035,6 +1098,8 @@ def run_group(driver, wait: WebDriverWait, item: dict[str, Any]) -> dict[str, An
             if not cod_result.get("ok"):
                 result["message"] = cod_result.get("message") or "COD step failed."
                 return result
+            if on_step_success:
+                on_step_success(build_single_step_post_result(item, cod_result))
 
         result["ok"] = True
         result["message"] = "Group submitted."
@@ -1110,21 +1175,34 @@ def main() -> None:
         return
 
     driver = setup_driver()
-    wait = WebDriverWait(driver, 30)
+    wait = WebDriverWait(driver, 20, poll_frequency=0.2)
     try:
         login_arm(driver, wait)
         open_arm_receivables(driver, wait)
-        results = [run_group(driver, wait, item) for item in items]
+        results = []
+
+        def post_step_result(step_post_result: dict[str, Any]) -> None:
+            if args.skip_post_results:
+                return
+            post_result = post_results([step_post_result])
+            safe_print(json.dumps(post_result, ensure_ascii=True, indent=2))
+
+        for item in items:
+            result = run_group(driver, wait, item, on_step_success=post_step_result)
+            results.append(result)
+            if not result.get("ok") and not args.skip_post_results:
+                post_result = post_results([result])
+                safe_print(json.dumps(post_result, ensure_ascii=True, indent=2))
     finally:
         driver.quit()
-
-    if not args.skip_post_results:
-        post_result = post_results(results)
-        safe_print(json.dumps(post_result, ensure_ascii=True, indent=2))
 
     ok_count = sum(1 for result in results if result.get("ok"))
     safe_print("[DONE] AI Remmiter processed groups:", len(results), "success:", ok_count, "failed:", len(results) - ok_count)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except RuntimeError as error:
+        safe_print("[ERROR]", error)
+        raise SystemExit(1) from error

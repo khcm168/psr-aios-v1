@@ -143,9 +143,11 @@ class ArmExportToCollectionTest(unittest.TestCase):
         source = endpoint.read_text(encoding="utf-8")
 
         self.assertIn("function doPost(e)", source)
-        self.assertIn("ARM_ROW_FIELDS", source)
+        self.assertIn("validateArmWebAppRows_", source)
+        self.assertIn("getAiRemmiterQueue", source)
+        self.assertIn("recordAiRemmiterResults", source)
         self.assertIn("ARM_WEBAPP_TOKEN", source)
-        self.assertIn("Collection!B1", source)
+        self.assertIn("Collection!B:H", source)
 
 
 if __name__ == "__main__":
