@@ -9,7 +9,7 @@ memory.
 ```text
 scriptId=199VYDwi4DHWaITv48vO1mri4i20C9CJ0euOsvEs3dHwUfNrwlBF02t6x
 deploymentId=AKfycbwLNOVxJlC6e18PVZJ-KzzZu63SfadIUnSyfohzybE0RA1hduKZWHW2C0jYDfSe1gTDxA
-version=36
+version=37
 url=https://script.google.com/macros/s/AKfycbwLNOVxJlC6e18PVZJ-KzzZu63SfadIUnSyfohzybE0RA1hduKZWHW2C0jYDfSe1gTDxA/exec
 contract=ARM Shared WebApp API 2.0.0
 webapp.executeAs=USER_DEPLOYING
@@ -36,6 +36,9 @@ automations\05_ARM_WebApp_Doctor\sync_config.cmd
 Use `--apply` only after the orchestrator confirms the live contract and
 capabilities. Tokens remain private in each project's `.env` and Apps Script
 Script Properties.
+
+Release 37 dry-run evidence: `arm-webapp-1781816380-f24c9e5b`, spreadsheet
+`log` row 673, three projects passed and zero skipped.
 
 ## Historical endpoints
 

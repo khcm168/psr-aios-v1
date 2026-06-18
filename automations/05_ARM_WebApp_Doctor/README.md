@@ -27,3 +27,7 @@ sync_config.cmd --apply
 ```
 
 The orchestrator never reads, prints, or copies `ARM_WEBAPP_TOKEN`.
+
+Release 37 adds sequential project probes and a structured spreadsheet audit
+row. See `docs\arm-webapp-orchestration.md` for the proven workflow, evidence,
+failure rules, and rollback procedure.

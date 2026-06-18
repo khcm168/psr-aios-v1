@@ -10,7 +10,7 @@ const ARM_WEBAPP_OPERATIONAL_RECORD = Object.freeze({
   pythonProjectRoot: 'C:\\Dev\\psr-aios-v1',
   scriptId: '199VYDwi4DHWaITv48vO1mri4i20C9CJ0euOsvEs3dHwUfNrwlBF02t6x',
   deploymentId: 'AKfycbwLNOVxJlC6e18PVZJ-KzzZu63SfadIUnSyfohzybE0RA1hduKZWHW2C0jYDfSe1gTDxA',
-  deployedVersion: 36,
+  deployedVersion: 37,
   contract: 'ARM Shared WebApp API',
   contractVersion: '2.0.0',
   execUrl: 'https://script.google.com/macros/s/AKfycbwLNOVxJlC6e18PVZJ-KzzZu63SfadIUnSyfohzybE0RA1hduKZWHW2C0jYDfSe1gTDxA/exec',
@@ -30,7 +30,8 @@ const ARM_WEBAPP_OPERATIONAL_RECORD = Object.freeze({
     beginDirectRun: 'action=beginAiRemitterDirectRun',
     recordDirectStep: 'action=recordAiRemitterDirectStep',
     releaseDirectRun: 'action=releaseAiRemitterDirectRun',
-    mesh: 'action=appendMeshCustomerQueue'
+    mesh: 'action=appendMeshCustomerQueue',
+    orchestratorAudit: 'action=recordOrchestratorAudit -> LOG'
   },
   requiredFiles: [
     '61_ARM_WebApp_Endpoint.js',

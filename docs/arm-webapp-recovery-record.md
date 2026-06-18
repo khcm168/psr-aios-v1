@@ -2,7 +2,7 @@
 
 The known-good production state is Apps Script deployment
 `AKfycbwLNOVxJlC6e18PVZJ-KzzZu63SfadIUnSyfohzybE0RA1hduKZWHW2C0jYDfSe1gTDxA`,
-version `36`, in script project
+version `37`, in script project
 `199VYDwi4DHWaITv48vO1mri4i20C9CJ0euOsvEs3dHwUfNrwlBF02t6x`.
 
 The same `/exec` URL is intentionally used by `psr-aios-v1` for Collection

@@ -44,14 +44,24 @@ def safe_print(*values: Any) -> None:
 
 
 def resolve_import_url() -> tuple[str, str | None]:
-    url = os.getenv("ARM_IMPORT_WEBAPP_URL") or os.getenv("ARM_WEBAPP_URL")
-    env_var = "ARM_IMPORT_WEBAPP_URL" if os.getenv("ARM_IMPORT_WEBAPP_URL") else "ARM_WEBAPP_URL"
+    candidate = os.getenv("ARM_WEBAPP_CANDIDATE_URL")
+    url = candidate or os.getenv("ARM_IMPORT_WEBAPP_URL") or os.getenv("ARM_WEBAPP_URL")
+    env_var = (
+        "ARM_WEBAPP_CANDIDATE_URL"
+        if candidate
+        else "ARM_IMPORT_WEBAPP_URL" if os.getenv("ARM_IMPORT_WEBAPP_URL") else "ARM_WEBAPP_URL"
+    )
     return env_var, url
 
 
 def resolve_remmiter_url() -> tuple[str, str | None]:
-    url = os.getenv("ARM_REMMITER_WEBAPP_URL") or os.getenv("ARM_WEBAPP_URL")
-    env_var = "ARM_REMMITER_WEBAPP_URL" if os.getenv("ARM_REMMITER_WEBAPP_URL") else "ARM_WEBAPP_URL"
+    candidate = os.getenv("ARM_WEBAPP_CANDIDATE_URL")
+    url = candidate or os.getenv("ARM_REMMITER_WEBAPP_URL") or os.getenv("ARM_WEBAPP_URL")
+    env_var = (
+        "ARM_WEBAPP_CANDIDATE_URL"
+        if candidate
+        else "ARM_REMMITER_WEBAPP_URL" if os.getenv("ARM_REMMITER_WEBAPP_URL") else "ARM_WEBAPP_URL"
+    )
     return env_var, url
 
 

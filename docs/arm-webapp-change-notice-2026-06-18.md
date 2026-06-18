@@ -6,7 +6,7 @@ This project uses shared Apps Script deployment:
 AKfycbwLNOVxJlC6e18PVZJ-KzzZu63SfadIUnSyfohzybE0RA1hduKZWHW2C0jYDfSe1gTDxA
 ```
 
-The deployment was updated in place to version `36`; its `/exec` URL remains
+The deployment was updated in place to version `37`; its `/exec` URL remains
 unchanged. It serves ARM Collection import, direct-run remittance, lock
 management, and optional Mesh capabilities against production spreadsheet
 `1eTnZppbhu7fpwdFTrnFoQmxchylsZus0Sw4j1t61Zzo`, sheet `Collection`.
@@ -14,6 +14,10 @@ management, and optional Mesh capabilities against production spreadsheet
 Version `36` adds machine-readable `contract`, `contractVersion`,
 `releaseVersion`, and `deploymentId` health fields. The canonical registry and
 configuration orchestrator live in `C:\Dev\psr-gas`:
+
+Version `37` adds sequential project proofs and structured audit logging. The
+2026-06-19 proof `arm-webapp-1781816380-f24c9e5b` passed all three projects and
+was verified in production spreadsheet `log` row 673.
 
 ```cmd
 automations\05_ARM_WebApp_Doctor\sync_config.cmd
