@@ -38,7 +38,11 @@ class DoctorArmWebappsTest(unittest.TestCase):
     def test_import_check_passes_on_expected_health_json(self):
         response = FakeResponse(
             status_code=200,
-            json_data={"ok": True, "message": doctor.IMPORT_HEALTH_MESSAGE},
+            json_data={
+                "ok": True,
+                "message": doctor.IMPORT_HEALTH_MESSAGE,
+                "capabilities": [doctor.IMPORT_CAPABILITY],
+            },
         )
         with mock.patch.dict(os.environ, {"ARM_IMPORT_WEBAPP_URL": "https://import.example/exec"}, clear=False):
             result = doctor.check_import_webapp(session=FakeSession(get_response=response))
@@ -61,6 +65,17 @@ class DoctorArmWebappsTest(unittest.TestCase):
 
         self.assertFalse(result.ok)
         self.assertEqual(result.classification, "wrong_health_message")
+
+    def test_import_check_requires_declared_capability(self):
+        response = FakeResponse(
+            status_code=200,
+            json_data={"ok": True, "message": doctor.IMPORT_HEALTH_MESSAGE},
+        )
+        with mock.patch.dict(os.environ, {"ARM_IMPORT_WEBAPP_URL": "https://import.example/exec"}, clear=False):
+            result = doctor.check_import_webapp(session=FakeSession(get_response=response))
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.classification, "missing_import_capability")
 
     def test_remmiter_check_passes_on_ok_true(self):
         response = FakeResponse(status_code=200, json_data={"ok": True, "result": {"items": []}})

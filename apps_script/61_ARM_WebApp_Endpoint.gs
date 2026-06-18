@@ -1,5 +1,10 @@
 const ARM_WEBAPP_CFG = {
   tokenPropertyName: 'ARM_WEBAPP_TOKEN',
+  contractName: 'ARM Shared WebApp API',
+  contractVersion: '2.0.0',
+  releaseVersion: 36,
+  deploymentId: 'AKfycbwLNOVxJlC6e18PVZJ-KzzZu63SfadIUnSyfohzybE0RA1hduKZWHW2C0jYDfSe1gTDxA',
+  spreadsheetId: '1eTnZppbhu7fpwdFTrnFoQmxchylsZus0Sw4j1t61Zzo',
   sheetName: 'Collection',
   headerRow: 2,
   startRow: 3,
@@ -13,7 +18,21 @@ const ARM_WEBAPP_CFG = {
 function doGet() {
   return createArmWebAppJsonResponse_({
     ok: true,
-    message: 'ARM Collection import endpoint is available.'
+    message: 'ARM Collection import endpoint is available.',
+    contract: ARM_WEBAPP_CFG.contractName,
+    contractVersion: ARM_WEBAPP_CFG.contractVersion,
+    releaseVersion: ARM_WEBAPP_CFG.releaseVersion,
+    deploymentId: ARM_WEBAPP_CFG.deploymentId,
+    capabilities: [
+      'collectionImport',
+      'previewAiRemitterQueue',
+      'beginAiRemitterDirectRun',
+      'recordAiRemitterDirectStep',
+      'releaseAiRemitterDirectRun',
+      'getAiRemitterDirectRunLock',
+      'clearAiRemitterDirectRunLock',
+      'appendMeshCustomerQueue'
+    ]
   });
 }
 
@@ -22,19 +41,69 @@ function doPost(e) {
     const payload = parseArmWebAppPayload_(e);
     assertArmWebAppToken_(payload.token);
 
-    if (payload.action === 'getAiRemmiterQueue') {
+    if (payload.action === 'previewAiRemitterQueue') {
       return createArmWebAppJsonResponse_({
         ok: true,
-        message: 'AI Remmiter queue fetched.',
-        result: getCollectionAiRemmiterQueue()
+        result: previewAiRemmiterQueueForWebApp_()
       });
     }
 
-    if (payload.action === 'recordAiRemmiterResults') {
+    if (payload.action === 'beginAiRemitterDirectRun') {
       return createArmWebAppJsonResponse_({
         ok: true,
-        message: 'AI Remmiter results recorded.',
-        result: recordCollectionAiRemmiterResults(payload.results)
+        result: beginCollectionAiRemmiterDirectRun_(payload.workerId)
+      });
+    }
+
+    if (payload.action === 'recordAiRemitterDirectStep') {
+      return createArmWebAppJsonResponse_({
+        ok: true,
+        result: recordCollectionAiRemmiterDirectStep_(
+          payload.runId,
+          payload.workerId,
+          payload.step
+        )
+      });
+    }
+
+    if (payload.action === 'releaseAiRemitterDirectRun') {
+      return createArmWebAppJsonResponse_({
+        ok: true,
+        result: releaseCollectionAiRemmiterDirectRun_(
+          payload.runId,
+          payload.workerId,
+          payload.summary
+        )
+      });
+    }
+
+    if (payload.action === 'getAiRemitterDirectRunLock') {
+      return createArmWebAppJsonResponse_({
+        ok: true,
+        result: getCollectionAiRemmiterDirectRunLock_()
+      });
+    }
+
+    if (payload.action === 'clearAiRemitterDirectRunLock') {
+      return createArmWebAppJsonResponse_({
+        ok: true,
+        result: clearCollectionAiRemmiterDirectRunLock_(payload.confirmation)
+      });
+    }
+
+    if (payload.action === 'appendMeshCustomerQueue') {
+      return createArmWebAppJsonResponse_({
+        ok: true,
+        result: appendCollectionMeshCustomerQueue_(payload.steps, payload.runId)
+      });
+    }
+
+    if (payload.action === 'g2PrintDateWindow') {
+      const result = rebuildG2PrintForDateWindow_(payload.startDate, payload.endDate);
+      return createArmWebAppJsonResponse_({
+        ok: true,
+        message: 'G receipt print sheet rebuilt for requested date window.',
+        result: result
       });
     }
 
@@ -53,9 +122,10 @@ function doPost(e) {
     });
   }
 }
+
 function updateArmCollectionReceivablesFromRows(rows) {
   const cfg = ARM_WEBAPP_CFG;
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getArmWebAppSpreadsheet_();
   const sheet = ss.getSheetByName(cfg.sheetName);
   if (!sheet) throw new Error('Missing sheet: ' + cfg.sheetName);
 
@@ -82,6 +152,9 @@ function updateArmCollectionReceivablesFromRows(rows) {
   if (typeof applyCollectionStatusSyncStatusValidation_ === 'function') {
     applyCollectionStatusSyncStatusValidation_(sheet);
   }
+  if (typeof ensureCollectionAiRemmiterStatusOptions_ === 'function') {
+    ensureCollectionAiRemmiterStatusOptions_(sheet);
+  }
 
   const preservedStatusCount = statuses.filter(function(row) {
     return toArmWebAppText_(row[0]);
@@ -107,6 +180,15 @@ function rotateArmWebAppToken() {
   PropertiesService.getScriptProperties().setProperty(ARM_WEBAPP_CFG.tokenPropertyName, token);
   Logger.log('New ARM_WEBAPP_TOKEN: ' + token);
   return token;
+}
+
+function authorizeArmWebAppSpreadsheetAccess() {
+  const ss = getArmWebAppSpreadsheet_();
+  return {
+    ok: true,
+    spreadsheetName: ss.getName(),
+    collectionSheetFound: Boolean(ss.getSheetByName(ARM_WEBAPP_CFG.sheetName))
+  };
 }
 
 function parseArmWebAppPayload_(e) {
@@ -165,7 +247,7 @@ function getArmCollectionRowKey_(row) {
 }
 
 function appendArmWebAppLog_(info) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getArmWebAppSpreadsheet_();
   let logSheet = ss.getSheetByName(ARM_WEBAPP_CFG.logSheetName);
   if (!logSheet) logSheet = ss.insertSheet(ARM_WEBAPP_CFG.logSheetName);
 
@@ -197,6 +279,10 @@ function appendArmWebAppLog_(info) {
       info.firstKey,
     'Python performs ARM browser export; Apps Script validates and writes Collection B:H, preserving I status by closing number. Y:AF is not modified.'
   ]);
+}
+
+function getArmWebAppSpreadsheet_() {
+  return SpreadsheetApp.openById(ARM_WEBAPP_CFG.spreadsheetId);
 }
 
 function createArmWebAppJsonResponse_(payload) {

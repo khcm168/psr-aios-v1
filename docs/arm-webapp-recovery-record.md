@@ -1,67 +1,26 @@
 # ARM WebApp Recovery Record
 
-This file records the known-good state after the OneDrive-to-C:\Dev move caused stale .env and stale WebApp deployment IDs.
+The known-good production state is Apps Script deployment
+`AKfycbwLNOVxJlC6e18PVZJ-KzzZu63SfadIUnSyfohzybE0RA1hduKZWHW2C0jYDfSe1gTDxA`,
+version `36`, in script project
+`199VYDwi4DHWaITv48vO1mri4i20C9CJ0euOsvEs3dHwUfNrwlBF02t6x`.
 
-## Good Endpoint
+The same `/exec` URL is intentionally used by `psr-aios-v1` for Collection
+import and by `ARM` for direct-run remittance. The endpoint declares its
+contract, release, deployment ID, and capabilities through `doGet`.
 
-`	ext
-https://script.google.com/macros/s/AKfycbwLNOVxJlC6e18PVZJ-KzzZu63SfadIUnSyfohzybE0RA1hduKZWHW2C0jYDfSe1gTDxA/exec
-`
+## Recovery sequence
 
-This is deployment $deploymentId, version 27, in Apps Script project $scriptId.
+1. In `C:\Dev\psr-gas`, run `npx.cmd clasp deployments` and
+   `npx.cmd clasp versions`.
+2. Run `python tools\arm_webapp_orchestrator.py` to compare the live endpoint
+   and all registered client URLs.
+3. If the live endpoint passes but local URLs drifted, rerun with `--apply`.
+4. In `C:\Dev\psr-aios-v1`, run
+   `.\.venv\Scripts\python.exe scripts\doctor_arm_webapps.py --check all`.
+5. In `C:\Dev\ARM`, run `python scripts\webapp_health.py` and a queue preview
+   before any direct remittance.
 
-The same URL is intentionally used by:
-
-`	ext
-ARM_WEBAPP_URL
-ARM_IMPORT_WEBAPP_URL
-ARM_REMMITER_WEBAPP_URL
-`
-
-## Why One URL Works
-
-61_ARM_WebApp_Endpoint now handles both workflows:
-
-- Plain import POST with ows -> updateArmCollectionReceivablesFromRows
-- ction=getAiRemmiterQueue -> getCollectionAiRemmiterQueue
-- ction=recordAiRemmiterResults -> ecordCollectionAiRemmiterResults
-
-This preserves rm_export_to_collection.py while restoring collection_ai_remmiter.py.
-
-## Verification Commands
-
-`powershell
-C:\Dev\psr-aios-v1\.venv\Scripts\python.exe C:\Dev\psr-aios-v1\scripts\doctor_arm_webapps.py --check all
-C:\Dev\psr-aios-v1\.venv\Scripts\python.exe C:\Dev\psr-aios-v1\scripts\collection_ai_remmiter.py --dry-run --limit 1
-`
-
-Expected:
-
-`	ext
-doctor: passed=2 failed=0
-remitter dry-run: Queue valid rows > 0, invalid checked rows: 0
-`
-
-## Files That Must Stay Together
-
-Python repo C:\Dev\psr-aios-v1:
-
-`	ext
-.env
-apps_script/61_ARM_WebApp_Endpoint.gs
-apps_script/37_collection_AI_Remmiter.js
-scripts/collection_ai_remmiter.py
-scripts/arm_export_to_collection.py
-scripts/doctor_arm_webapps.py
-`
-
-Apps Script repo psr-gas:
-
-`	ext
-appsscript.json
-00_ARM_WebApp_Operational_Record.js
-61_ARM_WebApp_Endpoint.js
-37_collection_AI_Remmiter.js
-`
-
-Secrets are intentionally excluded from git. The important non-secret deployment facts are stored here and in the Apps Script JS record file.
+Never copy or commit `ARM_WEBAPP_TOKEN`. If the endpoint targets another
+spreadsheet, create and register a separate deployment instead of repurposing
+this production deployment.

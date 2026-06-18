@@ -87,8 +87,15 @@ Useful commands:
 
 Behavior:
 - `import` expects the ARM import health JSON from the WebApp root.
-- `remmiter` sends a read-only queue request and fails clearly if the endpoint is actually an import-only handler.
+- `remmiter` sends the modern, read-only `previewAiRemitterQueue` request and
+  fails clearly if the endpoint is actually an import-only handler.
 - Exit code `0` means all selected checks passed; non-zero means at least one failed.
+
+The canonical deployment and client registry are owned by `C:\Dev\psr-gas`.
+Run `automations\05_ARM_WebApp_Doctor\sync_config.cmd` to audit this project's
+URL variables, or add `--apply` after a reviewed deployment change. The ARM
+project owns live direct remittance; the legacy `scripts\collection_ai_remmiter.py`
+flow is not the deployment contract for new integrations.
 
 ### `scripts/CRM.py`
 

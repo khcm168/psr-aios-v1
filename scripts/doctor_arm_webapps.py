@@ -16,8 +16,11 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT_DIR / ".env", override=True, encoding="utf-8-sig")
 
 IMPORT_HEALTH_MESSAGE = "ARM Collection import endpoint is available."
-REMMITER_QUEUE_ACTION = "getAiRemmiterQueue"
-REQUEST_TIMEOUT_SECONDS = 30
+IMPORT_CAPABILITY = "collectionImport"
+REMMITER_QUEUE_ACTION = "previewAiRemitterQueue"
+REMMITER_CAPABILITY = REMMITER_QUEUE_ACTION
+HEALTH_TIMEOUT_SECONDS = 30
+REMMITER_PREVIEW_TIMEOUT_SECONDS = 120
 
 
 @dataclass
@@ -83,7 +86,7 @@ def check_import_webapp(session: requests.Session | None = None) -> CheckResult:
 
     client = session or requests.Session()
     try:
-        response = client.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+        response = client.get(url, timeout=HEALTH_TIMEOUT_SECONDS)
     except requests.RequestException as err:
         return CheckResult(
             name="import",
@@ -139,6 +142,18 @@ def check_import_webapp(session: requests.Session | None = None) -> CheckResult:
             http_status=response.status_code,
         )
 
+    capabilities = set(body.get("capabilities") or [])
+    if IMPORT_CAPABILITY not in capabilities:
+        return CheckResult(
+            name="import",
+            env_var=env_var,
+            url=url,
+            ok=False,
+            classification="missing_import_capability",
+            detail=f"Endpoint does not declare {IMPORT_CAPABILITY!r}.",
+            http_status=response.status_code,
+        )
+
     return CheckResult(
         name="import",
         env_var=env_var,
@@ -179,7 +194,7 @@ def check_remmiter_webapp(session: requests.Session | None = None) -> CheckResul
             url,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={"Content-Type": "application/json; charset=utf-8"},
-            timeout=REQUEST_TIMEOUT_SECONDS,
+            timeout=REMMITER_PREVIEW_TIMEOUT_SECONDS,
         )
     except requests.RequestException as err:
         return CheckResult(
@@ -233,7 +248,7 @@ def check_remmiter_webapp(session: requests.Session | None = None) -> CheckResul
             url=url,
             ok=False,
             classification="wrong_contract_import_endpoint",
-            detail="Endpoint is alive but serves ARM import only.",
+            detail=f"Endpoint is alive but does not route {REMMITER_QUEUE_ACTION!r}.",
             http_status=response.status_code,
         )
 

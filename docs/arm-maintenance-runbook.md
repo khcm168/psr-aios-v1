@@ -1,5 +1,8 @@
 # ARM Collection Import Maintenance Runbook
 
+Current shared-deployment notice:
+`docs/arm-webapp-change-notice-2026-06-18.md`.
+
 This runbook is for maintaining the ARM receivables export/import flow used by `scripts/arm_export_to_collection.py`. It records the practical failure modes seen during maintenance so the next repair starts from known ground instead of rediscovering the same traps.
 
 ## Moving Parts

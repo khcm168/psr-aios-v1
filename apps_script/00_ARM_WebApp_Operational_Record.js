@@ -6,11 +6,13 @@
  * Do not store secrets here.
  */
 const ARM_WEBAPP_OPERATIONAL_RECORD = Object.freeze({
-  verifiedDate: '2026-06-03',
+  verifiedDate: '2026-06-18',
   pythonProjectRoot: 'C:\\Dev\\psr-aios-v1',
   scriptId: '199VYDwi4DHWaITv48vO1mri4i20C9CJ0euOsvEs3dHwUfNrwlBF02t6x',
   deploymentId: 'AKfycbwLNOVxJlC6e18PVZJ-KzzZu63SfadIUnSyfohzybE0RA1hduKZWHW2C0jYDfSe1gTDxA',
-  deployedVersion: 27,
+  deployedVersion: 36,
+  contract: 'ARM Shared WebApp API',
+  contractVersion: '2.0.0',
   execUrl: 'https://script.google.com/macros/s/AKfycbwLNOVxJlC6e18PVZJ-KzzZu63SfadIUnSyfohzybE0RA1hduKZWHW2C0jYDfSe1gTDxA/exec',
   envVars: [
     'ARM_WEBAPP_URL',
@@ -24,12 +26,16 @@ const ARM_WEBAPP_OPERATIONAL_RECORD = Object.freeze({
   },
   actions: {
     importRows: 'POST rows -> updateArmCollectionReceivablesFromRows',
-    getQueue: 'action=getAiRemmiterQueue -> getCollectionAiRemmiterQueue',
-    recordResults: 'action=recordAiRemmiterResults -> recordCollectionAiRemmiterResults'
+    previewQueue: 'action=previewAiRemitterQueue -> previewAiRemmiterQueueForWebApp_',
+    beginDirectRun: 'action=beginAiRemitterDirectRun',
+    recordDirectStep: 'action=recordAiRemitterDirectStep',
+    releaseDirectRun: 'action=releaseAiRemitterDirectRun',
+    mesh: 'action=appendMeshCustomerQueue'
   },
   requiredFiles: [
     '61_ARM_WebApp_Endpoint.js',
     '37_collection_AI_Remmiter.js',
+    '38_collection_mesh.js',
     'appsscript.json'
   ],
   verifyCommands: [

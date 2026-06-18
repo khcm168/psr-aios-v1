@@ -144,8 +144,9 @@ class ArmExportToCollectionTest(unittest.TestCase):
 
         self.assertIn("function doPost(e)", source)
         self.assertIn("validateArmWebAppRows_", source)
-        self.assertIn("getAiRemmiterQueue", source)
-        self.assertIn("recordAiRemmiterResults", source)
+        self.assertIn("previewAiRemitterQueue", source)
+        self.assertIn("beginAiRemitterDirectRun", source)
+        self.assertIn("recordAiRemitterDirectStep", source)
         self.assertIn("ARM_WEBAPP_TOKEN", source)
         self.assertIn("Collection!B:H", source)
 
