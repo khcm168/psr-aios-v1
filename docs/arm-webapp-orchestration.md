@@ -2,7 +2,7 @@
 
 Canonical source, deployment registry, and orchestrator live in
 `C:\Dev\psr-gas`. This project consumes the shared endpoint for Collection
-import and verifies the modern remitter preview contract.
+import. ARM owns the single full remitter queue preview.
 
 Production release `37` was proven on 2026-06-19 by run
 `arm-webapp-1781816380-f24c9e5b`; the structured evidence is in production
@@ -16,9 +16,13 @@ python C:\Dev\psr-gas\tools\arm_webapp_orchestrator.py --dry-run
 ```
 
 Dry-run does not edit `.env`. It injects `ARM_WEBAPP_CANDIDATE_URL` only into
-the doctor process, runs `--check all`, and writes one audit row after the
+the doctor process, runs `--check import`, and writes one audit row after the
 registered probes finish. Use `--apply` only after a fully successful logged
 proof; it can change only the URL variables listed in the canonical registry.
+
+Do not add the remitter preview back to this project's orchestrator probe.
+Running it here and again in ARM duplicates a slow Collection/ledger scan and
+can create cascading client timeouts.
 
 Bot and programmer rules:
 
