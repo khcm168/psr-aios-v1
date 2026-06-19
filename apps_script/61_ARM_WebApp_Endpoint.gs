@@ -2,7 +2,7 @@ const ARM_WEBAPP_CFG = {
   tokenPropertyName: 'ARM_WEBAPP_TOKEN',
   contractName: 'ARM Shared WebApp API',
   contractVersion: '2.0.0',
-  releaseVersion: 36,
+  releaseVersion: 37,
   deploymentId: 'AKfycbwLNOVxJlC6e18PVZJ-KzzZu63SfadIUnSyfohzybE0RA1hduKZWHW2C0jYDfSe1gTDxA',
   spreadsheetId: '1eTnZppbhu7fpwdFTrnFoQmxchylsZus0Sw4j1t61Zzo',
   sheetName: 'Collection',
@@ -31,7 +31,8 @@ function doGet() {
       'releaseAiRemitterDirectRun',
       'getAiRemitterDirectRunLock',
       'clearAiRemitterDirectRunLock',
-      'appendMeshCustomerQueue'
+      'appendMeshCustomerQueue',
+      'recordOrchestratorAudit'
     ]
   });
 }
@@ -95,6 +96,13 @@ function doPost(e) {
       return createArmWebAppJsonResponse_({
         ok: true,
         result: appendCollectionMeshCustomerQueue_(payload.steps, payload.runId)
+      });
+    }
+
+    if (payload.action === 'recordOrchestratorAudit') {
+      return createArmWebAppJsonResponse_({
+        ok: true,
+        result: recordArmWebAppOrchestratorAudit_(payload.audit)
       });
     }
 
@@ -283,6 +291,73 @@ function appendArmWebAppLog_(info) {
 
 function getArmWebAppSpreadsheet_() {
   return SpreadsheetApp.openById(ARM_WEBAPP_CFG.spreadsheetId);
+}
+
+function recordArmWebAppOrchestratorAudit_(audit) {
+  if (!audit || typeof audit !== 'object' || Array.isArray(audit)) {
+    throw new Error('audit must be an object.');
+  }
+  const runId = toArmWebAppText_(audit.runId);
+  const mode = toArmWebAppText_(audit.mode);
+  const status = toArmWebAppText_(audit.status);
+  if (!runId || !/^[A-Za-z0-9._-]{1,100}$/.test(runId)) {
+    throw new Error('audit.runId is invalid.');
+  }
+  if (mode !== 'dry-run' && mode !== 'apply') {
+    throw new Error('audit.mode must be dry-run or apply.');
+  }
+  if (status !== 'passed' && status !== 'failed') {
+    throw new Error('audit.status must be passed or failed.');
+  }
+  const projects = Array.isArray(audit.projects) ? audit.projects.slice(0, 20) : [];
+  const passed = projects.filter(function(project) {
+    return project && project.status === 'passed';
+  }).length;
+  const failed = projects.length - passed;
+  const aliases = projects.map(function(project) {
+    return toArmWebAppText_(project && project.name) + '=' +
+      toArmWebAppText_(project && project.status);
+  }).join(' | ');
+  const note = JSON.stringify({
+    runId: runId,
+    status: status,
+    contract: toArmWebAppText_(audit.contract),
+    contractVersion: toArmWebAppText_(audit.contractVersion),
+    releaseVersion: Number(audit.releaseVersion) || 0,
+    deploymentId: toArmWebAppText_(audit.deploymentId),
+    durationSeconds: Number(audit.durationSeconds) || 0,
+    projects: projects
+  }).slice(0, 45000);
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const sheet = getArmWebAppSpreadsheet_();
+    let logSheet = sheet.getSheetByName(ARM_WEBAPP_CFG.logSheetName);
+    if (!logSheet) logSheet = sheet.insertSheet(ARM_WEBAPP_CFG.logSheetName);
+    logSheet.appendRow([
+      new Date(),
+      'ARM WebApp Orchestrator ' + mode,
+      ARM_WEBAPP_CFG.sheetName,
+      '',
+      '',
+      projects.length,
+      passed,
+      failed,
+      'release=' + ARM_WEBAPP_CFG.releaseVersion,
+      mode,
+      aliases,
+      note
+    ]);
+    return {
+      runId: runId,
+      logSheet: ARM_WEBAPP_CFG.logSheetName,
+      logRow: logSheet.getLastRow(),
+      status: status
+    };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function createArmWebAppJsonResponse_(payload) {

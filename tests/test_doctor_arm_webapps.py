@@ -35,6 +35,25 @@ class FakeSession:
 
 
 class DoctorArmWebappsTest(unittest.TestCase):
+    def test_candidate_url_overrides_persisted_urls(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "ARM_WEBAPP_CANDIDATE_URL": "https://candidate.example/exec",
+                "ARM_IMPORT_WEBAPP_URL": "https://production.example/exec",
+                "ARM_REMMITER_WEBAPP_URL": "https://production.example/exec",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                doctor.resolve_import_url(),
+                ("ARM_WEBAPP_CANDIDATE_URL", "https://candidate.example/exec"),
+            )
+            self.assertEqual(
+                doctor.resolve_remmiter_url(),
+                ("ARM_WEBAPP_CANDIDATE_URL", "https://candidate.example/exec"),
+            )
+
     def test_import_check_passes_on_expected_health_json(self):
         response = FakeResponse(
             status_code=200,
