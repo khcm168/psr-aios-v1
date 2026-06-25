@@ -92,19 +92,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--browser", choices=["chrome", "edge"], default="edge")
     parser.add_argument(
         "--from-sheet-v",
+        dest="from_sheet_v",
         action="store_true",
-        help="After the test record, load rows from the configured workbook sheet V.",
+        default=True,
+        help="Load rows from the configured workbook sheet V. This is the default.",
+    )
+    parser.add_argument(
+        "--no-from-sheet-v",
+        dest="from_sheet_v",
+        action="store_false",
+        help="Do not load sheet V; useful for lookup/debug-only runs.",
     )
     parser.add_argument(
         "--date",
         default=None,
-        help="Sheet date filter for column H. Defaults to today in Asia/Taipei, e.g. 2026/5/26.",
+        help="Sheet date filter for column H. Defaults to today in Asia/Taipei as yyyy/m/d, e.g. 2026/5/29.",
     )
     parser.add_argument("--sheet-tab", default="V", help="Source sheet tab. Default: V.")
     parser.add_argument(
         "--skip-test-record",
+        dest="skip_test_record",
         action="store_true",
-        help="Skip the standalone customerName test record and only process sheet rows.",
+        default=True,
+        help="Skip the standalone customerName test record and only process sheet rows. This is the default.",
+    )
+    parser.add_argument(
+        "--include-test-record",
+        dest="skip_test_record",
+        action="store_false",
+        help="Also save the standalone customerName test record before sheet rows.",
     )
     parser.add_argument("--max-rows", type=int, default=0, help="Limit sheet rows. 0 means all matches.")
     parser.add_argument(
@@ -644,6 +660,24 @@ def required_env(*names: str) -> str:
     raise RuntimeError(f"Missing required environment variable: {' or '.join(names)}")
 
 
+def load_dotenv_files() -> None:
+    try:
+        from dotenv import load_dotenv
+    except Exception:
+        return
+
+    candidates = [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parents[1] / ".env",
+    ]
+    seen: set[Path] = set()
+    for dotenv_path in candidates:
+        if dotenv_path in seen:
+            continue
+        seen.add(dotenv_path)
+        load_dotenv(dotenv_path)
+
+
 def get_sheet_values(spreadsheet_id: str, range_name: str) -> list[list[str]]:
     from google.oauth2.service_account import Credentials
     from googleapiclient.discovery import build
@@ -662,12 +696,7 @@ def get_sheet_values(spreadsheet_id: str, range_name: str) -> list[list[str]]:
 
 
 def load_sheet_v_records(config: RunConfig) -> list[WorkRecord]:
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv(Path.cwd() / ".env")
-    except Exception:
-        pass
+    load_dotenv_files()
 
     spreadsheet_id = required_env("N1_SOURCE_SPREADSHEET_ID", "SPREADSHEET_ID")
     target_date = normalize_date_text(config.sheet_date)
@@ -707,6 +736,13 @@ def load_sheet_v_records(config: RunConfig) -> list[WorkRecord]:
 
 
 def run(config: RunConfig) -> None:
+    sheet_records: list[WorkRecord] = []
+    if config.from_sheet_v and not (getattr(config, "debug_controls", False) or getattr(config, "debug_dialog", False)):
+        sheet_records = load_sheet_v_records(config)
+        if not sheet_records and config.skip_test_record:
+            safe_print("[DONE] No sheet rows matched; no CRM record was created.")
+            return
+
     driver = build_driver(config)
     try:
         login(driver, config)
@@ -731,8 +767,7 @@ def run(config: RunConfig) -> None:
             save_current_record(driver, test_record)
 
         if config.from_sheet_v:
-            records = load_sheet_v_records(config)
-            for record in records:
+            for record in sheet_records:
                 fill_work_record(driver, record)
                 save_current_record(driver, record)
 
