@@ -14,6 +14,12 @@ from app.config import _required_env
 
 DEFAULT_SOURCE_WORKBOOK_TITLE = "地區會議資料V7.0 beta"
 DEFAULT_TAB_NAME = "母親節追蹤"
+DEFAULT_LIST_TAB_NAME = "List"
+DEFAULT_DAILY_REPORT_TAB_NAME = "V"
+DEFAULT_DAILY_REPORT_KEYWORD = "母親節"
+DEFAULT_SALES_SOURCE_TAB_NAME = "今日拜訪"
+DEFAULT_SALES_MONTH = "25-05"
+DEFAULT_WRITE_BACK_START_CELL = "N1"
 DEFAULT_OUTPUT_DIR = Path("data/mothers_day_followup")
 DEFAULT_FOCUS_STATUSES = ("追蹤中", "鼓勵自用體驗", "擴量中")
 CLOSED_STATUS_TERMS = (
@@ -47,9 +53,24 @@ CUSTOMER_HEADER_CANDIDATES = (
     "姓名",
     "診所名稱",
     "院所名稱",
+    "醫療單位名稱",
     "藥局名稱",
     "店名",
     "對象",
+)
+CUSTOMER_ID_HEADER_CANDIDATES = (
+    "customer_id",
+    "customerid",
+    "客戶代號",
+    "客戶編號",
+    "客戶ID",
+    "客戶id",
+    "關聯代號",
+)
+POSTAL_HEADER_CANDIDATES = (
+    "郵遞區號",
+    "郵區",
+    "郵遞區",
 )
 REGION_HEADER_CANDIDATES = (
     "區域",
@@ -85,6 +106,8 @@ STATUS_VALUE_TERMS = DEFAULT_FOCUS_STATUSES + CLOSED_STATUS_TERMS + (
     "體驗",
     "擴量",
 )
+CUSTOMER_ID_RE = re.compile(r"\b[PS]\d{6}\b", re.IGNORECASE)
+CELL_RE = re.compile(r"^([A-Za-z]+)(\d+)$")
 
 
 @dataclass(frozen=True)
@@ -98,6 +121,11 @@ class MothersDayFollowupConfig:
     focus_statuses: tuple[str, ...]
     include_other_open: bool
     max_rows: int
+    list_tab_name: str = DEFAULT_LIST_TAB_NAME
+    daily_report_tab_name: str = DEFAULT_DAILY_REPORT_TAB_NAME
+    daily_report_keyword: str = DEFAULT_DAILY_REPORT_KEYWORD
+    sales_source_tab_name: str = DEFAULT_SALES_SOURCE_TAB_NAME
+    sales_month: str = DEFAULT_SALES_MONTH
 
     @classmethod
     def from_env(
@@ -112,6 +140,11 @@ class MothersDayFollowupConfig:
         focus_statuses: Iterable[str] = DEFAULT_FOCUS_STATUSES,
         include_other_open: bool = False,
         max_rows: int = 0,
+        list_tab_name: str | None = None,
+        daily_report_tab_name: str | None = None,
+        daily_report_keyword: str | None = None,
+        sales_source_tab_name: str | None = None,
+        sales_month: str | None = None,
     ) -> "MothersDayFollowupConfig":
         return cls(
             source_spreadsheet_id=source_spreadsheet_id
@@ -132,6 +165,16 @@ class MothersDayFollowupConfig:
             focus_statuses=tuple(status for status in focus_statuses if status),
             include_other_open=include_other_open,
             max_rows=max_rows,
+            list_tab_name=list_tab_name
+            or os.getenv("MOTHERS_DAY_LIST_TAB", DEFAULT_LIST_TAB_NAME),
+            daily_report_tab_name=daily_report_tab_name
+            or os.getenv("MOTHERS_DAY_DAILY_REPORT_TAB", DEFAULT_DAILY_REPORT_TAB_NAME),
+            daily_report_keyword=daily_report_keyword
+            or os.getenv("MOTHERS_DAY_DAILY_REPORT_KEYWORD", DEFAULT_DAILY_REPORT_KEYWORD),
+            sales_source_tab_name=sales_source_tab_name
+            or os.getenv("MOTHERS_DAY_SALES_SOURCE_TAB", DEFAULT_SALES_SOURCE_TAB_NAME),
+            sales_month=sales_month
+            or os.getenv("MOTHERS_DAY_SALES_MONTH", DEFAULT_SALES_MONTH),
         )
 
 
@@ -145,7 +188,38 @@ def build_followup_pack(
     values = worksheet.get_all_values()
     table = table_from_values(values)
     rows, diagnostics = select_followup_rows(table, config)
-    action_rows = [build_action_row(row, table, config) for row in rows]
+    customer_lookup = build_customer_lookup(
+        get_optional_table(spreadsheet, config.list_tab_name, header_row=2)
+    )
+    daily_report_index = build_daily_report_index(
+        get_optional_table(spreadsheet, config.daily_report_tab_name, header_row=2),
+        config.daily_report_keyword,
+    )
+    sales_index = build_sales_month_index(
+        get_optional_values(spreadsheet, config.sales_source_tab_name),
+        config.sales_month,
+    )
+    action_rows = [
+        build_action_row(
+            row,
+            table,
+            config,
+            customer_lookup=customer_lookup,
+            daily_report_index=daily_report_index,
+            sales_index=sales_index,
+        )
+        for row in rows
+    ]
+    diagnostics = {
+        **diagnostics,
+        "customer_id_matches": sum(1 for row in action_rows if row.get("customer_id")),
+        "daily_report_matches": sum(
+            1 for row in action_rows if row.get("daily_report_matches")
+        ),
+        "sales_2025_05_matches": sum(
+            1 for row in action_rows if row.get("sales_2025_05") not in ("", None)
+        ),
+    }
 
     return {
         "pack_name": "mothers_day_followup",
@@ -158,12 +232,17 @@ def build_followup_pack(
             or actual_title == config.source_workbook_title,
             "tab": config.tab_name,
             "header_row": table["header_row"],
+            "lookup_tab": config.list_tab_name,
+            "daily_report_tab": config.daily_report_tab_name,
+            "sales_source_tab": config.sales_source_tab_name,
         },
         "filters": {
             "region": config.region,
             "focus_statuses": list(config.focus_statuses),
             "include_other_open": config.include_other_open,
             "max_rows": config.max_rows,
+            "daily_report_keyword": config.daily_report_keyword,
+            "sales_month": config.sales_month,
         },
         "diagnostics": diagnostics,
         "rows": action_rows,
@@ -176,6 +255,24 @@ def table_from_values(values: list[list[str]]) -> dict[str, Any]:
     if header_index is None:
         return {"headers": [], "records": [], "header_row": 0}
 
+    return table_from_header_index(trimmed, header_index)
+
+
+def table_from_values_with_header(
+    values: list[list[str]],
+    header_row: int,
+) -> dict[str, Any]:
+    trimmed = [_trim_row(row) for row in values]
+    header_index = header_row - 1
+    if header_index < 0 or header_index >= len(trimmed):
+        return {"headers": [], "records": [], "header_row": 0}
+    return table_from_header_index(trimmed, header_index)
+
+
+def table_from_header_index(
+    trimmed: list[list[str]],
+    header_index: int,
+) -> dict[str, Any]:
     width = max((len(row) for row in trimmed[header_index:]), default=0)
     raw_headers = trimmed[header_index] + [""] * (width - len(trimmed[header_index]))
     headers = dedupe_headers(raw_headers)
@@ -185,6 +282,29 @@ def table_from_values(values: list[list[str]]) -> dict[str, Any]:
         if any(value for value in record.values()):
             records.append({"source_row": offset, "values": record})
     return {"headers": headers, "records": records, "header_row": header_index + 1}
+
+
+def get_optional_values(spreadsheet: Any, tab_name: str) -> list[list[str]]:
+    if not tab_name:
+        return []
+    try:
+        return spreadsheet.worksheet(tab_name).get_all_values()
+    except Exception:
+        return []
+
+
+def get_optional_table(
+    spreadsheet: Any,
+    tab_name: str,
+    *,
+    header_row: int | None = None,
+) -> dict[str, Any]:
+    values = get_optional_values(spreadsheet, tab_name)
+    if not values:
+        return {"headers": [], "records": [], "header_row": 0}
+    if header_row:
+        return table_from_values_with_header(values, header_row)
+    return table_from_values(values)
 
 
 def find_header_index(rows: list[list[str]]) -> int | None:
@@ -275,30 +395,182 @@ def build_action_row(
     row: dict[str, Any],
     table: dict[str, Any],
     config: MothersDayFollowupConfig,
+    *,
+    customer_lookup: dict[tuple[str, str], str] | None = None,
+    daily_report_index: dict[str, list[dict[str, str]]] | None = None,
+    sales_index: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, str | int]:
     values = row["values"]
     status_header = resolve_status_header(table, config.focus_statuses) or ""
     customer_header = find_header(table["headers"], CUSTOMER_HEADER_CANDIDATES) or ""
     owner_header = find_header(table["headers"], OWNER_HEADER_CANDIDATES) or ""
     region_header = find_header(table["headers"], REGION_HEADER_CANDIDATES) or ""
+    postal_header = find_header(table["headers"], POSTAL_HEADER_CANDIDATES) or ""
     status = normalize_text(values.get(status_header, ""))
     customer = normalize_text(values.get(customer_header, "")) or "客戶"
     owner = normalize_text(values.get(owner_header, ""))
     region = normalize_text(values.get(region_header, ""))
+    postal = normalize_text(values.get(postal_header, ""))
+    customer_id = resolve_customer_id(values, customer, postal, customer_lookup or {})
+    daily_matches = (daily_report_index or {}).get(customer_id, []) if customer_id else []
+    sales = (sales_index or {}).get(customer_id, {}) if customer_id else {}
     classification = classify_status(status)
 
     return {
         "priority": classification["priority"],
         "sheet_row": row["source_row"],
+        "customer_id": customer_id,
         "customer": customer,
         "owner": owner,
         "region": region,
         "status": status,
         "status_class": classification["label"],
+        "sales_2025_05": format_amount(sales.get("amount")),
+        "sales_2025_05_note": sales.get("note", ""),
+        "daily_report_matches": summarize_daily_matches(daily_matches),
         "line_text": build_line_text(customer, status),
         "visit_next_step": build_visit_next_step(status),
         "evidence": summarize_evidence(values),
     }
+
+
+def build_customer_lookup(table: dict[str, Any]) -> dict[tuple[str, str], str]:
+    headers = table.get("headers", [])
+    customer_header = find_header(headers, CUSTOMER_HEADER_CANDIDATES) or ""
+    customer_id_header = find_header(headers, CUSTOMER_ID_HEADER_CANDIDATES) or ""
+    postal_header = find_header(headers, POSTAL_HEADER_CANDIDATES) or ""
+    lookup: dict[tuple[str, str], str] = {}
+    for row in table.get("records", []):
+        values = row["values"]
+        customer_id = normalize_customer_id(
+            values.get(customer_id_header, "") if customer_id_header else ""
+        ) or find_customer_id_in_values(values.values())
+        customer = normalize_lookup_key(values.get(customer_header, ""))
+        postal = normalize_lookup_key(values.get(postal_header, ""))
+        if not customer_id or not customer:
+            continue
+        if postal:
+            lookup[(customer, postal)] = customer_id
+        lookup.setdefault((customer, ""), customer_id)
+    return lookup
+
+
+def resolve_customer_id(
+    values: dict[str, str],
+    customer: str,
+    postal: str,
+    customer_lookup: dict[tuple[str, str], str],
+) -> str:
+    customer_id_header = find_header(list(values.keys()), CUSTOMER_ID_HEADER_CANDIDATES) or ""
+    direct_id = normalize_customer_id(values.get(customer_id_header, ""))
+    if direct_id:
+        return direct_id
+    scanned_id = find_customer_id_in_values(values.values())
+    if scanned_id:
+        return scanned_id
+    customer_key = normalize_lookup_key(customer)
+    postal_key = normalize_lookup_key(postal)
+    return customer_lookup.get((customer_key, postal_key), "") or customer_lookup.get(
+        (customer_key, ""), ""
+    )
+
+
+def build_daily_report_index(
+    table: dict[str, Any],
+    keyword: str,
+) -> dict[str, list[dict[str, str]]]:
+    headers = table.get("headers", [])
+    content_header = find_header(headers, ("紀錄內容", "拜訪紀錄", "內容", "備註")) or ""
+    date_header = find_header(headers, ("*開始日期", "*結束日期", "確認日期", "日期")) or ""
+    customer_header = find_header(headers, CUSTOMER_HEADER_CANDIDATES) or ""
+    customer_id_header = find_header(headers, CUSTOMER_ID_HEADER_CANDIDATES) or ""
+    result: dict[str, list[dict[str, str]]] = {}
+    target = normalize_text(keyword)
+    if not target:
+        return result
+    for row in table.get("records", []):
+        values = row["values"]
+        matching_cells = [
+            value for value in values.values() if target in normalize_text(value)
+        ]
+        if not matching_cells:
+            continue
+        customer_id = normalize_customer_id(
+            values.get(customer_id_header, "") if customer_id_header else ""
+        ) or find_customer_id_in_values(values.values())
+        if not customer_id:
+            continue
+        content = normalize_text(values.get(content_header, "")) if content_header else ""
+        if target not in content:
+            content = normalize_text(matching_cells[0])
+        result.setdefault(customer_id, []).append(
+            {
+                "sheet_row": str(row["source_row"]),
+                "date": normalize_text(values.get(date_header, "")) if date_header else "",
+                "customer": normalize_text(values.get(customer_header, ""))
+                if customer_header
+                else "",
+                "content": compact_text(content, 100),
+            }
+        )
+    return result
+
+
+def build_sales_month_index(
+    values: list[list[str]],
+    month: str,
+) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for row_index, row in enumerate(values, start=1):
+        customer_id = find_customer_id_in_values(row)
+        if not customer_id:
+            continue
+        amount, source_line = extract_month_amount(row, month)
+        if amount is None:
+            continue
+        result[customer_id] = {
+            "amount": amount,
+            "note": f"{normalize_sales_month(month)} total {format_amount(amount)} (row {row_index})",
+            "source_line": source_line,
+        }
+    return result
+
+
+def extract_month_amount(
+    row: Iterable[Any],
+    month: str,
+) -> tuple[float | None, str]:
+    month_targets = sales_month_targets(month)
+    fallback: tuple[float | None, str] = (None, "")
+    for cell in row:
+        for line in normalize_text(cell).split("\n"):
+            normalized_line = normalize_text(line)
+            if not normalized_line:
+                continue
+            if not any(target in normalized_line for target in month_targets):
+                continue
+            numbers = parse_numbers(normalized_line)
+            starts_with_month = any(
+                normalized_line.startswith(target) for target in month_targets
+            )
+            if numbers and starts_with_month:
+                return numbers[-1], normalized_line
+            if numbers and any(abs(number) >= 100 for number in numbers):
+                fallback = (numbers[-1], normalized_line)
+    return fallback
+
+
+def summarize_daily_matches(matches: list[dict[str, str]]) -> str:
+    chunks = []
+    for match in matches[:2]:
+        prefix = " / ".join(
+            part for part in (match.get("date", ""), f"V row {match.get('sheet_row', '')}") if part
+        )
+        content = match.get("content", "")
+        chunks.append(f"{prefix}: {content}" if prefix else content)
+    if len(matches) > 2:
+        chunks.append(f"+{len(matches) - 2} more")
+    return compact_text(" ; ".join(chunks), 220)
 
 
 def classify_status(status: str) -> dict[str, str]:
@@ -361,7 +633,9 @@ def render_markdown(pack: dict[str, Any]) -> str:
         "",
         f"- Source workbook: {pack['source']['actual_workbook_title'] or pack['source']['expected_workbook_title']}",
         f"- Source tab: {pack['source']['tab']} (header row {pack['source']['header_row']})",
+        f"- Enrichment tabs: customer IDs from {pack['source'].get('lookup_tab', '')}; daily reports from {pack['source'].get('daily_report_tab', '')}; sales from {pack['source'].get('sales_source_tab', '')}",
         f"- Rows selected: {pack['diagnostics']['selected_rows']} of {pack['diagnostics']['source_rows']}",
+        f"- Enrichment matches: customer IDs {pack['diagnostics'].get('customer_id_matches', 0)}, {pack['filters'].get('daily_report_keyword', '母親節')} reports {pack['diagnostics'].get('daily_report_matches', 0)}, 2025/05 sales {pack['diagnostics'].get('sales_2025_05_matches', 0)}",
         f"- Focus statuses: {', '.join(pack['filters']['focus_statuses'])}",
     ]
     if not pack["diagnostics"].get("region_filter_applied"):
@@ -376,10 +650,14 @@ def render_markdown(pack: dict[str, Any]) -> str:
         lines.append("_No matching open follow-up rows found._")
         return "\n".join(lines).rstrip() + "\n"
 
+    sales_header = f"{normalize_sales_month(pack['filters'].get('sales_month', DEFAULT_SALES_MONTH))} Sales"
     headers = [
         "Priority",
         "Row",
+        "Customer ID",
         "Customer",
+        sales_header,
+        "V 母親節紀錄",
         "Owner",
         "Region",
         "Status",
@@ -396,7 +674,10 @@ def render_markdown(pack: dict[str, Any]) -> str:
                 [
                     row["priority"],
                     row["sheet_row"],
+                    row.get("customer_id", ""),
                     row["customer"],
+                    row.get("sales_2025_05", ""),
+                    row.get("daily_report_matches", ""),
                     row["owner"],
                     row["region"],
                     row["status"],
@@ -427,6 +708,85 @@ def write_followup_pack(
     return markdown_path, json_path
 
 
+def build_sheet_write_values(pack: dict[str, Any]) -> list[list[Any]]:
+    rows = pack.get("rows", [])
+    sales_header = f"{normalize_sales_month(pack['filters'].get('sales_month', DEFAULT_SALES_MONTH))}銷售"
+    values: list[list[Any]] = [
+        [
+            f"last update in {format_report_day(pack.get('report_date', ''))} with {len(rows)} rows",
+        ],
+        [
+            f"來源: {pack['source'].get('tab', '')}; V關鍵字: {pack['filters'].get('daily_report_keyword', '')}; 產出日: {pack.get('report_date', '')}",
+        ],
+        [
+            "優先",
+            "母親節追蹤列",
+            "Customer_ID",
+            "客戶",
+            sales_header,
+            "V母親節紀錄",
+            "區域",
+            "狀態",
+            "分類",
+            "LINE訊息",
+            "拜訪下一步",
+            "佐證",
+        ],
+    ]
+    for row in rows:
+        values.append(
+            [
+                row.get("priority", ""),
+                row.get("sheet_row", ""),
+                row.get("customer_id", ""),
+                row.get("customer", ""),
+                row.get("sales_2025_05", ""),
+                row.get("daily_report_matches", ""),
+                row.get("region", ""),
+                row.get("status", ""),
+                row.get("status_class", ""),
+                row.get("line_text", ""),
+                row.get("visit_next_step", ""),
+                row.get("evidence", ""),
+            ]
+        )
+    return values
+
+
+def write_pack_to_sheet(
+    *,
+    spreadsheet: Any,
+    pack: dict[str, Any],
+    tab_name: str,
+    start_cell: str,
+) -> dict[str, Any]:
+    values = build_sheet_write_values(pack)
+    worksheet = spreadsheet.worksheet(tab_name)
+    clear_range = sheet_range_for_size(
+        tab_name=tab_name,
+        start_cell=start_cell,
+        row_count=max(len(values), 200),
+        col_count=max((len(row) for row in values), default=1),
+    )
+    worksheet.clear_values(clear_range)
+    write_range = sheet_range_for_size(
+        tab_name=tab_name,
+        start_cell=start_cell,
+        row_count=len(values),
+        col_count=max((len(row) for row in values), default=1),
+    )
+    result = worksheet.update_values(write_range, values)
+    return {
+        "tab": tab_name,
+        "start_cell": start_cell,
+        "range": write_range,
+        "clear_range": clear_range,
+        "rows": len(values),
+        "columns": max((len(row) for row in values), default=0),
+        "updated_cells": result.get("updatedCells", 0) if isinstance(result, dict) else 0,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="mothers_day_followup",
@@ -436,6 +796,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-spreadsheet-id")
     parser.add_argument("--source-workbook-title")
     parser.add_argument("--tab", default=None)
+    parser.add_argument("--list-tab", default=None)
+    parser.add_argument("--daily-report-tab", default=None)
+    parser.add_argument("--daily-report-keyword", default=None)
+    parser.add_argument("--sales-source-tab", default=None)
+    parser.add_argument("--sales-month", default=None)
+    parser.add_argument(
+        "--write-back-tab",
+        default=None,
+        help="Optional existing worksheet tab to receive the action table.",
+    )
+    parser.add_argument(
+        "--write-back-start-cell",
+        default=DEFAULT_WRITE_BACK_START_CELL,
+        help="Top-left cell for optional write-back output.",
+    )
     parser.add_argument("--output-dir")
     parser.add_argument("--region", default="N1")
     parser.add_argument(
@@ -478,6 +853,11 @@ def main() -> None:
         focus_statuses=args.focus_statuses or DEFAULT_FOCUS_STATUSES,
         include_other_open=args.include_other_open,
         max_rows=args.max_rows,
+        list_tab_name=args.list_tab,
+        daily_report_tab_name=args.daily_report_tab,
+        daily_report_keyword=args.daily_report_keyword,
+        sales_source_tab_name=args.sales_source_tab,
+        sales_month=args.sales_month,
     )
     settings = Settings.from_env(require_google=True)
 
@@ -508,8 +888,22 @@ def main() -> None:
             pack, config.output_dir, config.report_date
         )
         sync_context = build_file_sync_context([markdown_path, json_path])
+        write_back_result = None
+        if args.write_back_tab:
+            write_back_result = write_pack_to_sheet(
+                spreadsheet=spreadsheet,
+                pack=pack,
+                tab_name=args.write_back_tab,
+                start_cell=args.write_back_start_cell,
+            )
         print(f"Wrote {markdown_path}")
         print(f"Wrote {json_path}")
+        if write_back_result:
+            print(
+                "Updated "
+                f"{write_back_result['range']} "
+                f"({write_back_result['rows']} rows, {write_back_result['columns']} columns)."
+            )
         print(
             "Selected "
             f"{pack['diagnostics']['selected_rows']} of {pack['diagnostics']['source_rows']} rows."
@@ -526,12 +920,18 @@ def main() -> None:
                 "region": config.region,
                 "focus_statuses": list(config.focus_statuses),
                 "include_other_open": config.include_other_open,
+                "list_tab": config.list_tab_name,
+                "daily_report_tab": config.daily_report_tab_name,
+                "daily_report_keyword": config.daily_report_keyword,
+                "sales_source_tab": config.sales_source_tab_name,
+                "sales_month": config.sales_month,
                 "selected_rows": pack["diagnostics"]["selected_rows"],
                 "markdown_path": str(markdown_path),
                 "json_path": str(json_path),
                 "markdown_abs_path": str(markdown_path.resolve()),
                 "json_abs_path": str(json_path.resolve()),
                 "file_sync": sync_context,
+                "write_back": write_back_result,
             },
             details=build_result_link_details(
                 message="Mother's Day follow-up pack files written.",
@@ -550,6 +950,10 @@ def main() -> None:
                 "tab": config.tab_name,
                 "report_date": config.report_date,
                 "region": config.region,
+                "daily_report_tab": config.daily_report_tab_name,
+                "sales_source_tab": config.sales_source_tab_name,
+                "write_back_tab": args.write_back_tab,
+                "write_back_start_cell": args.write_back_start_cell,
             },
             details=str(exc),
         )
@@ -581,7 +985,7 @@ class GoogleApiSpreadsheet:
 
         credentials = Credentials.from_service_account_file(
             credentials_path,
-            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
         )
         service = build("sheets", "v4", credentials=credentials)
         metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
@@ -604,6 +1008,21 @@ class GoogleApiWorksheet:
             range=f"{quote_sheet_name(self.name)}!A:ZZ",
         ).execute()
         return result.get("values", [])
+
+    def update_values(self, range_name: str, values: list[list[Any]]) -> dict[str, Any]:
+        return self.service.spreadsheets().values().update(
+            spreadsheetId=self.spreadsheet_id,
+            range=range_name,
+            valueInputOption="USER_ENTERED",
+            body={"values": values},
+        ).execute()
+
+    def clear_values(self, range_name: str) -> dict[str, Any]:
+        return self.service.spreadsheets().values().clear(
+            spreadsheetId=self.spreadsheet_id,
+            range=range_name,
+            body={},
+        ).execute()
 
 
 def status_priority(status: str) -> int:
@@ -737,6 +1156,119 @@ def normalize_customer_name(customer: str) -> str:
     if not name or name == "客戶":
         return "您好"
     return name
+
+
+def normalize_lookup_key(value: Any) -> str:
+    return re.sub(r"\s+", "", normalize_text(value)).lower()
+
+
+def normalize_customer_id(value: Any) -> str:
+    match = CUSTOMER_ID_RE.search(normalize_text(value))
+    return match.group(0).upper() if match else ""
+
+
+def find_customer_id_in_values(values: Iterable[Any]) -> str:
+    for value in values:
+        customer_id = normalize_customer_id(value)
+        if customer_id:
+            return customer_id
+    return ""
+
+
+def sales_month_targets(month: str) -> tuple[str, ...]:
+    normalized = normalize_text(month)
+    match = re.search(r"(?:(20)?(\d{2})[/-])(\d{1,2})", normalized)
+    if not match:
+        return (normalized,)
+    year = int(match.group(2))
+    full_year = 2000 + year
+    month_number = int(match.group(3))
+    return (
+        f"{year:02d}-{month_number:02d}",
+        f"{year:02d}/{month_number:02d}",
+        f"{year:02d}-{month_number}",
+        f"{year:02d}/{month_number}",
+        f"{full_year}/{month_number:02d}",
+        f"{full_year}/{month_number}",
+        f"{full_year}-{month_number:02d}",
+        f"{full_year}-{month_number}",
+    )
+
+
+def normalize_sales_month(month: str) -> str:
+    target = sales_month_targets(month)[4] if len(sales_month_targets(month)) > 4 else month
+    return target.replace("-", "/")
+
+
+def parse_numbers(text: str) -> list[float]:
+    values = []
+    for raw in re.findall(r"-?\d[\d,]*(?:\.\d+)?", text):
+        try:
+            values.append(float(raw.replace(",", "")))
+        except ValueError:
+            continue
+    return values
+
+
+def format_amount(value: Any) -> str:
+    if value in ("", None):
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number.is_integer():
+        return f"{int(number):,}"
+    return f"{number:,.2f}"
+
+
+def format_report_day(value: Any) -> str:
+    text = normalize_text(value)
+    try:
+        return date.fromisoformat(text).strftime("%Y/%m/%d")
+    except ValueError:
+        return date.today().strftime("%Y/%m/%d")
+
+
+def sheet_range_for_size(
+    *,
+    tab_name: str,
+    start_cell: str,
+    row_count: int,
+    col_count: int,
+) -> str:
+    start_col, start_row = split_cell(start_cell)
+    end_col = column_number_to_letters(
+        column_letters_to_number(start_col) + max(col_count, 1) - 1
+    )
+    end_row = start_row + max(row_count, 1) - 1
+    return f"{quote_sheet_name(tab_name)}!{start_col.upper()}{start_row}:{end_col}{end_row}"
+
+
+def split_cell(cell: str) -> tuple[str, int]:
+    match = CELL_RE.match(normalize_text(cell))
+    if not match:
+        raise ValueError(f"Invalid cell reference: {cell}")
+    return match.group(1).upper(), int(match.group(2))
+
+
+def column_letters_to_number(letters: str) -> int:
+    number = 0
+    for char in letters.upper():
+        if not ("A" <= char <= "Z"):
+            raise ValueError(f"Invalid column letters: {letters}")
+        number = number * 26 + ord(char) - ord("A") + 1
+    return number
+
+
+def column_number_to_letters(number: int) -> str:
+    if number < 1:
+        raise ValueError(f"Invalid column number: {number}")
+    letters = ""
+    while number:
+        number, remainder = divmod(number - 1, 26)
+        letters = chr(ord("A") + remainder) + letters
+    return letters
 
 
 def normalize_text(value: Any) -> str:
