@@ -2,12 +2,13 @@
 
 Canonical source, deployment registry, and orchestrator live in
 `C:\Dev\psr-gas`. This project consumes the shared endpoint for Collection
-import and verifies the modern remitter preview contract.
+import. ARM owns the single full remitter queue preview.
 
-Production release `37` was proven on 2026-06-19 by run
-`arm-webapp-1781816380-f24c9e5b`; the structured evidence is in production
-spreadsheet `log`, row 673. All three registered projects passed:
-`psr-aios-v1`, `ARM`, and `line_edge_selenium`.
+Production release `37` and all four registered projects were proven on
+2026-06-19 by run `arm-webapp-1781860828-637d4a12`; the structured evidence is
+in production spreadsheet `log`, row 6133. `psr-aios-v1`, `ARM`,
+`line_edge_selenium`, and `easyflow` passed, and an independent Sheets API
+readback confirmed the row contents.
 
 Run the proof from the canonical checkout:
 
@@ -16,9 +17,19 @@ python C:\Dev\psr-gas\tools\arm_webapp_orchestrator.py --dry-run
 ```
 
 Dry-run does not edit `.env`. It injects `ARM_WEBAPP_CANDIDATE_URL` only into
-the doctor process, runs `--check all`, and writes one audit row after the
+the doctor process, runs `--check import`, and writes one audit row after the
 registered probes finish. Use `--apply` only after a fully successful logged
 proof; it can change only the URL variables listed in the canonical registry.
+
+Do not add the remitter preview back to this project's orchestrator probe.
+Running it here and again in ARM duplicates a slow Collection/ledger scan and
+can create cascading client timeouts.
+
+This machine's `.env` sets `SERVICE_ACCOUNT_FILE` to a JSON in a stable private
+directory. EasyFlowExpense may reference that same existing file from its own
+`.env`; never copy either whole `.env`, duplicate the key into a repository, or
+commit/print credential contents. A different machine must provision its own
+equivalent private path and spreadsheet access.
 
 Bot and programmer rules:
 
@@ -30,3 +41,5 @@ Bot and programmer rules:
 - A failed proof blocks configuration changes and compatibility claims.
 - For rollback, restore the previous deployment version and matching registry,
   then rerun the complete dry-run.
+- Treat `line_edge_selenium` and `easyflow` as read-only observers. Do not add
+  WebApp URLs or live actions to their probes.
