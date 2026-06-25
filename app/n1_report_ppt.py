@@ -8,6 +8,8 @@ from typing import Any
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from app.n1_report_pack import default_report_date
+
 
 SLIDE_W = 12192000
 SLIDE_H = 6858000
@@ -15,6 +17,17 @@ MARGIN_X = 560000
 TITLE_Y = 350000
 BODY_Y = 1100000
 FOOTER_Y = 6380000
+REPORT_PACK_DIR = Path("data/report_packs")
+
+
+def default_json_path(report_date: str | None = None) -> Path:
+    selected_date = report_date or default_report_date()
+    return REPORT_PACK_DIR / f"n1_report_pack_{selected_date}.json"
+
+
+def default_ppt_path(report_date: str | None = None) -> Path:
+    selected_date = report_date or default_report_date()
+    return REPORT_PACK_DIR / f"N1_report_{selected_date}.pptx"
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,13 +37,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--json",
-        default="data/report_packs/n1_report_pack_2026-04-27.json",
-        help="Path to the n1_report_pack JSON file.",
+        default=None,
+        help="Path to the n1_report_pack JSON file. Defaults to the next Monday report pack.",
     )
     parser.add_argument(
         "--output",
-        default="data/report_packs/N1_report_2026-04-27.pptx",
-        help="Path for the generated PPTX.",
+        default=None,
+        help="Path for the generated PPTX. Defaults to the report date from the JSON pack.",
     )
     parser.add_argument(
         "--max-rows",
@@ -45,8 +58,10 @@ def main() -> None:
     from app.operation_log import try_append_operation_log
 
     args = parse_args()
-    json_path = Path(args.json)
-    output_path = Path(args.output)
+    json_path = Path(args.json) if args.json else default_json_path()
+    output_path = Path(args.output) if args.output else default_ppt_path(
+        _date_from_json_path(json_path)
+    )
     try:
         pack = json.loads(json_path.read_text(encoding="utf-8"))
         slides = build_slides(pack, max_rows=args.max_rows)
@@ -88,7 +103,7 @@ def build_slides(pack: dict[str, Any], max_rows: int) -> list[dict[str, Any]]:
         {
             "kind": "cover",
             "title": "N1 週報 / 地區業績營運報告",
-            "subtitle": _date_from_titles(report_titles) or "2026-04-27",
+            "subtitle": _date_from_titles(report_titles) or default_report_date(),
             "kicker": source_title,
             "lines": report_titles,
         }
@@ -309,6 +324,16 @@ def _date_from_titles(titles: list[str]) -> str:
         for part in parts:
             if len(part) == 10 and part[4] == "-" and part[7] == "-":
                 return part
+    return ""
+
+
+def _date_from_json_path(json_path: Path) -> str:
+    stem = json_path.stem
+    prefix = "n1_report_pack_"
+    if stem.startswith(prefix):
+        candidate = stem.removeprefix(prefix)
+        if len(candidate) == 10 and candidate[4] == "-" and candidate[7] == "-":
+            return candidate
     return ""
 
 

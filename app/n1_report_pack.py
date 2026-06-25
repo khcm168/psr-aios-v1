@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -12,13 +12,19 @@ from app.config import _required_env
 
 
 DEFAULT_SOURCE_WORKBOOK_TITLE = "地區會議資料V7.0 beta"
-DEFAULT_REPORT_DATE = "2026-04-27"
 DEFAULT_TABS = (
     "Action Plan 進度",
     "本月行動計畫",
     "今日拜訪",
     "反映事項",
 )
+
+
+def default_report_date(today: date | None = None) -> str:
+    """Return the next Monday on or after today for the N1 report cycle."""
+    base_date = today or date.today()
+    days_until_monday = (0 - base_date.weekday()) % 7
+    return (base_date + timedelta(days=days_until_monday)).isoformat()
 
 
 @dataclass(frozen=True)
@@ -40,7 +46,7 @@ class ReportPackConfig:
         source_workbook_title: str | None = None,
         weekly_report_spreadsheet_id: str | None = None,
         operations_report_spreadsheet_id: str | None = None,
-        report_date: str = DEFAULT_REPORT_DATE,
+        report_date: str | None = None,
         output_dir: str | Path | None = None,
         tabs: Iterable[str] = DEFAULT_TABS,
         max_rows_per_section: int = 12,
@@ -57,7 +63,9 @@ class ReportPackConfig:
             or os.getenv("N1_WEEKLY_REPORT_SPREADSHEET_ID", ""),
             operations_report_spreadsheet_id=operations_report_spreadsheet_id
             or os.getenv("N1_OPERATIONS_REPORT_SPREADSHEET_ID", ""),
-            report_date=report_date,
+            report_date=report_date
+            or os.getenv("N1_REPORT_DATE")
+            or default_report_date(),
             output_dir=Path(
                 output_dir
                 or os.getenv("N1_REPORT_PACK_OUTPUT_DIR", "data/report_packs")
@@ -178,7 +186,11 @@ def parse_args() -> argparse.Namespace:
         prog="n1_report_pack",
         description="Build the N1 weekly and operations report source pack from Google Sheets.",
     )
-    parser.add_argument("--date", default=DEFAULT_REPORT_DATE)
+    parser.add_argument(
+        "--date",
+        default=None,
+        help="Report date (YYYY-MM-DD). Defaults to the next Monday on or after today.",
+    )
     parser.add_argument("--output-dir")
     parser.add_argument("--source-spreadsheet-id")
     parser.add_argument("--source-workbook-title")
@@ -199,7 +211,6 @@ def main() -> None:
 
     load_environment()
     args = parse_args()
-    _validate_date(args.date)
     config = ReportPackConfig.from_env(
         source_spreadsheet_id=args.source_spreadsheet_id,
         source_workbook_title=args.source_workbook_title,
@@ -210,6 +221,7 @@ def main() -> None:
         tabs=args.tabs or DEFAULT_TABS,
         max_rows_per_section=args.max_rows_per_section,
     )
+    _validate_date(config.report_date)
     settings = Settings.from_env(require_google=True)
     try:
         spreadsheet = GoogleApiSpreadsheet.from_credentials(
