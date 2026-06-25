@@ -9,6 +9,8 @@ __pycache__/
 data/tmp*/
 data/report_packs/*
 data/mothers_day_followup/*
+data/arm_export_monitor/
+data/crm_work_record_trigger/
 !data/report_packs/.gitkeep
 !data/mothers_day_followup/.gitkeep
 scripts/autologin.txt
