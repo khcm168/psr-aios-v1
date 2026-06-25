@@ -1,5 +1,21 @@
 # Project Practice
 
+## Pre-action constitution
+
+Before changing code, running live workflows, opening PRs, merging, deploying,
+or touching external systems, read
+`docs/project-orchestration-constitution.md`.
+
+Classify the task before acting:
+
+- governor-level coordination;
+- local project implementation;
+- live action requiring the accountable user's explicit decision;
+- dirty-worktree triage where unrelated user work may be present.
+
+Keep one owner per repo/task, one functional slice per branch/PR, and record
+evidence before handing work off.
+
 ## ARM Shared WebApp orchestration
 
 Before changing ARM WebApp URLs, deployment assumptions, spreadsheet IDs,

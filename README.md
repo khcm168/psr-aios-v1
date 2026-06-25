@@ -15,6 +15,7 @@ This repo is intentionally small. It gives you a clean place to build scheduled 
 - `docs/google-sheets-setup.md` explains how to connect a real Sheet.
 - `docs/development-rules.md` records the project rules for future automation work.
 - `docs/workflow-reference.md` explains every Python workflow, launcher, write target, and safe-run command.
+- `docs/project-orchestration-constitution.md` defines governor/local-project cooperation and must be reviewed by agents before cross-project action.
 
 ## Automation Map
 
