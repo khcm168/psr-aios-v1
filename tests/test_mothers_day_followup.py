@@ -5,8 +5,11 @@ from app.mothers_day_followup import (
     MothersDayFollowupConfig,
     build_followup_pack,
     build_line_text,
+    build_sheet_write_values,
     classify_status,
+    extract_month_amount,
     render_markdown,
+    sheet_range_for_size,
     table_from_values,
 )
 
@@ -88,6 +91,50 @@ class MothersDayFollowupTest(unittest.TestCase):
         self.assertEqual(pack["rows"][0]["status_class"], "擴量推進")
         self.assertIn("LINE", render_markdown(pack))
 
+    def test_build_followup_pack_enriches_customer_id_sales_and_v_notes(self):
+        config = MothersDayFollowupConfig(
+            source_spreadsheet_id="source-123",
+            source_workbook_title="地區會議資料V7.0 beta",
+            tab_name="母親節追蹤",
+            output_dir=Path("out"),
+            report_date="2026-05-16",
+            region="N1",
+            focus_statuses=("追蹤中", "鼓勵自用體驗", "擴量中"),
+            include_other_open=False,
+            max_rows=0,
+        )
+        spreadsheet = FakeSpreadsheet(
+            {
+                "母親節追蹤": [
+                    ["贈品", "業務區碼", "郵遞區號", "診所名稱"],
+                    ["Q10", "N1", "247", "大安診所", "擴量中"],
+                ],
+                "List": [
+                    ["", "", "", ""],
+                    ["區域", "客戶名稱", "郵遞區號", "客戶代號"],
+                    ["N1", "大安診所", "247", "P247019"],
+                ],
+                "V": [
+                    ["", "客戶名稱", "確認日期", "紀錄內容"],
+                    ["Customer_ID", "", "*開始日期", "紀錄內容"],
+                    ["P247019", "大安診所", "2025/05/12", "母親節活動後詢問補貨節奏"],
+                ],
+                "今日拜訪": [
+                    ["大安診所", "P247019", "年月 大分子 小分子 小計\n25-05 0 0 63,000"],
+                ],
+            }
+        )
+
+        pack = build_followup_pack(spreadsheet=spreadsheet, config=config)
+        row = pack["rows"][0]
+        markdown = render_markdown(pack)
+
+        self.assertEqual(row["customer_id"], "P247019")
+        self.assertEqual(row["sales_2025_05"], "63,000")
+        self.assertIn("母親節活動後", row["daily_report_matches"])
+        self.assertIn("Customer ID", markdown)
+        self.assertIn("V 母親節紀錄", markdown)
+
     def test_include_other_open_keeps_non_closed_open_rows(self):
         config = MothersDayFollowupConfig(
             source_spreadsheet_id="source-123",
@@ -122,6 +169,58 @@ class MothersDayFollowupTest(unittest.TestCase):
 
         self.assertLessEqual(len(line_text), 120)
         self.assertIn("母親節活動後", line_text)
+
+    def test_extract_month_amount_prefers_month_total_line_over_header(self):
+        amount, source_line = extract_month_amount(
+            [
+                "品項 25-03 25-04 25-05",
+                "年月 大分子 小分子 小計\n25-05 0 0 10,500",
+            ],
+            "25-05",
+        )
+
+        self.assertEqual(amount, 10500)
+        self.assertEqual(source_line, "25-05 0 0 10,500")
+
+    def test_build_sheet_write_values_starting_block_shape(self):
+        pack = {
+            "report_date": "2026-05-18",
+            "source": {"tab": "母親節追蹤"},
+            "filters": {"daily_report_keyword": "母親節", "sales_month": "25-05"},
+            "rows": [
+                {
+                    "priority": "P1",
+                    "sheet_row": 7,
+                    "customer_id": "P247019",
+                    "customer": "大安診所",
+                    "sales_2025_05": "63,000",
+                    "daily_report_matches": "2025/05/12: 母親節活動後詢問補貨節奏",
+                    "region": "N1",
+                    "status": "擴量中",
+                    "status_class": "擴量推進",
+                    "line_text": "LINE",
+                    "visit_next_step": "拜訪下一步",
+                    "evidence": "佐證",
+                }
+            ],
+        }
+
+        values = build_sheet_write_values(pack)
+
+        self.assertEqual(values[0], ["last update in 2026/05/18 with 1 rows"])
+        self.assertEqual(values[2][0:4], ["優先", "母親節追蹤列", "Customer_ID", "客戶"])
+        self.assertEqual(values[3][2:5], ["P247019", "大安診所", "63,000"])
+
+    def test_sheet_range_for_size_builds_n1_output_range(self):
+        self.assertEqual(
+            sheet_range_for_size(
+                tab_name="母親節",
+                start_cell="N1",
+                row_count=4,
+                col_count=12,
+            ),
+            "'母親節'!N1:Y4",
+        )
 
 
 if __name__ == "__main__":
