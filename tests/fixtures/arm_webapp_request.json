@@ -1,5 +1,6 @@
 {
   "token": "test-arm-webapp-token",
+  "runPostImportWorkflow": true,
   "rows": [
     [
       "測試診所",

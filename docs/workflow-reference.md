@@ -37,11 +37,12 @@ All `.cmd` launchers are repo-relative and prefer `.venv\Scripts\python.exe` whe
 ### `scripts/arm_export_to_collection.py`
 
 Purpose:
-- Opens ARM in Edge, downloads overdue receivables Excel, parses rows, posts them to Apps Script, and updates `Collection!B1`.
+- Opens ARM in Edge, downloads overdue receivables Excel, parses rows, posts them to Apps Script, requests the Collection post-import status-sync/writeoff handoff, and updates `Collection!B1`.
 
 Important behavior:
 - Excel columns are resolved by header aliases, not fixed positions.
 - Valid rows must have a closing number matching `^61\d{2}-\d{10}$`.
+- After successful import, Apps Script runs status sync left-to-right, status sync right-to-left, then writeoff compact unless `--skip-post-import-workflow` is passed.
 - After successful import, writes:
 
 ```text
@@ -55,6 +56,7 @@ Useful commands:
 ```powershell
 .\.venv\Scripts\python.exe scripts\arm_export_to_collection.py --excel C:\path\ARM.xlsx --dry-run
 .\.venv\Scripts\python.exe scripts\arm_export_to_collection.py --excel C:\path\ARM.xlsx --skip-status-cell
+.\.venv\Scripts\python.exe scripts\arm_export_to_collection.py --excel C:\path\ARM.xlsx --skip-post-import-workflow
 ```
 
 Daily automation note:

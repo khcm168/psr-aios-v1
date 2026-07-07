@@ -447,13 +447,18 @@ def validate_arm_webapp_rows(rows: Any) -> list[list[str]]:
     return rows
 
 
-def build_arm_webapp_payload(rows: list[list[str]], token: str | None = None) -> dict[str, Any]:
+def build_arm_webapp_payload(
+    rows: list[list[str]],
+    token: str | None = None,
+    run_post_import_workflow: bool = True,
+) -> dict[str, Any]:
     webapp_token = ARM_WEBAPP_TOKEN if token is None else token
     if not webapp_token:
         raise ValueError("ARM WebApp token is required.")
     return {
         "token": webapp_token,
         "rows": validate_arm_webapp_rows(rows),
+        "runPostImportWorkflow": bool(run_post_import_workflow),
     }
 
 
@@ -465,9 +470,9 @@ def parse_arm_webapp_response(result: Any) -> dict[str, Any]:
     return result
 
 
-def post_rows_to_apps_script(rows: list[list[str]]) -> dict[str, Any]:
+def post_rows_to_apps_script(rows: list[list[str]], run_post_import_workflow: bool = True) -> dict[str, Any]:
     print("[STEP] Send rows to Apps Script")
-    payload = build_arm_webapp_payload(rows)
+    payload = build_arm_webapp_payload(rows, run_post_import_workflow=run_post_import_workflow)
     response = requests.post(
         ARM_IMPORT_WEBAPP_URL,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -532,6 +537,11 @@ def main() -> None:
         action="store_true",
         help="Do not update the Collection status sentence after import.",
     )
+    parser.add_argument(
+        "--skip-post-import-workflow",
+        action="store_true",
+        help="Import Collection rows only; do not run status sync or writeoff compact after import.",
+    )
     args = parser.parse_args()
 
     require_env(
@@ -551,7 +561,8 @@ def main() -> None:
         }, ensure_ascii=True, indent=2))
         return
 
-    result = post_rows_to_apps_script(rows)
+    run_post_import_workflow = not args.skip_post_import_workflow
+    result = post_rows_to_apps_script(rows, run_post_import_workflow=run_post_import_workflow)
     if not args.skip_status_cell:
         try:
             result["statusText"] = update_collection_status_cell(len(rows))
@@ -560,6 +571,10 @@ def main() -> None:
             print("[WARN] Collection status cell update failed; import already succeeded.")
             safe_print(str(err))
     print("[DONE] ARM Excel imported to Collection.")
+    if run_post_import_workflow:
+        print("[DONE] Collection post-import workflow requested.")
+    else:
+        print("[DONE] Collection post-import workflow skipped by flag.")
     safe_print(json.dumps(result, ensure_ascii=True, indent=2)[:3000])
 
 

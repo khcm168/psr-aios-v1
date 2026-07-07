@@ -113,6 +113,17 @@ class ArmExportToCollectionTest(unittest.TestCase):
             payload,
         )
 
+    def test_arm_webapp_payload_can_skip_post_import_workflow(self):
+        payload = json.loads((FIXTURE_DIR / "arm_webapp_request.json").read_text(encoding="utf-8"))
+
+        self.assertFalse(
+            build_arm_webapp_payload(
+                payload["rows"],
+                token=payload["token"],
+                run_post_import_workflow=False,
+            )["runPostImportWorkflow"]
+        )
+
     def test_arm_webapp_row_validation_rejects_shape_changes(self):
         valid_row = json.loads((FIXTURE_DIR / "arm_webapp_request.json").read_text(encoding="utf-8"))["rows"][0]
 

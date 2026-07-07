@@ -11,6 +11,7 @@ The Python sender posts UTF-8 JSON with this shape:
 ```json
 {
   "token": "shared-secret",
+  "runPostImportWorkflow": true,
   "rows": [
     [
       "customer_name",
@@ -29,6 +30,7 @@ Rules:
 
 - `token` must match Apps Script `ScriptProperties.ARM_WEBAPP_TOKEN`.
 - `rows` must be a non-empty array.
+- `runPostImportWorkflow` defaults to `true` from the Python sender. When true, Apps Script runs the post-import handoff in order: status sync left-to-right, status sync right-to-left, then writeoff compact. Use `--skip-post-import-workflow` only for import-only recovery.
 - Each row must contain exactly 7 string cells in the order above.
 - `closing_number` must match `^61\d{2}-\d{10}$`.
 
@@ -60,7 +62,7 @@ The Python sender only requires `ok: true` for success. Any missing or falsey `o
 
 ## Endpoint Behavior
 
-The scaffold in `apps_script/61_ARM_WebApp_Endpoint.gs` validates the request, clears the existing Collection data body, and writes rows starting at `Collection!A3` by default. It intentionally does not update `Collection!B1`; the Python script writes the status sentence after the import succeeds.
+The scaffold in `apps_script/61_ARM_WebApp_Endpoint.gs` validates the request, clears the existing Collection data body, and writes rows starting at `Collection!A3` by default. When `runPostImportWorkflow` is true, it logs a final post-import workflow receipt after the status-sync/writeoff chain completes or fails. It intentionally does not update `Collection!B1`; the Python script writes the status sentence after the import succeeds.
 
 Apps Script properties:
 

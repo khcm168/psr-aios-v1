@@ -23,8 +23,9 @@ The intended flow is:
 2. Python parses ARM receivable rows.
 3. Python POSTs rows to the Apps Script Web App URL from `ARM_IMPORT_WEBAPP_URL`, falling back to `ARM_WEBAPP_URL` for older setups.
 4. Apps Script validates `ARM_WEBAPP_TOKEN` and writes the `Collection` data body.
-5. Apps Script preserves/updates Collection status/archive behavior.
-6. Python optionally updates `Collection!B1` with `last update in yyyy/mm/dd with N rows` using a Google service account.
+5. Apps Script runs the post-import handoff when requested by Python: Collection status sync left-to-right, Collection status sync right-to-left, then writeoff compact.
+6. Apps Script logs a final `ARM WebApp Post Import Workflow` receipt with `completed` or `failed`.
+7. Python optionally updates `Collection!B1` with `last update in yyyy/mm/dd with N rows` using a Google service account.
 
 The data import is step 4. The `Collection!B1` update is useful, but it must not be treated as proof that the import failed if it has a credential problem after step 4 succeeds.
 
@@ -48,13 +49,13 @@ Import from an existing Excel file and skip only the optional `Collection!B1` se
 .\.venv\Scripts\python.exe scripts\arm_export_to_collection.py --excel C:\ARM_Downloads\arm-export.xls --skip-status-cell
 ```
 
-Full import from an existing Excel file:
+Full import from an existing Excel file. By default, this also requests the post-import status-sync/writeoff handoff:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\arm_export_to_collection.py --excel C:\ARM_Downloads\arm-export.xls
 ```
 
-Full browser export plus import:
+Full browser export plus import. By default, this also requests the post-import status-sync/writeoff handoff:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\arm_export_to_collection.py
@@ -65,6 +66,12 @@ Daily launcher behavior:
 - `automations/10_ARM_Output/run.cmd` runs `doctor_arm_webapps.py --check import` first.
 - If the preflight fails, the launcher prints `[WARN]` and still continues into the live ARM import.
 - Use `automations/05_ARM_WebApp_Doctor/run.cmd` when you want a standalone scheduled health check.
+
+Import only, for recovery when the post-import handoff must be deliberately skipped:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\arm_export_to_collection.py --excel C:\ARM_Downloads\arm-export.xls --skip-post-import-workflow
+```
 
 Run local contract tests:
 
@@ -298,5 +305,6 @@ If the cloud-tested behavior depends on local changes, commit and push those cha
 - Do not replace a Web App URL with an API executable URL.
 - Do not remove mojibake aliases unless tests prove they are unused and a real ARM export still parses.
 - Do not treat `Collection!B1` update failure as an import failure after Apps Script returns `ok: true`.
+- After a normal import, check the sheet `log` for `ARM WebApp Post Import Workflow`; absence of that row means the sender did not request `runPostImportWorkflow`.
 - Prefer tests and small health checks before rerunning a full ARM browser automation.
 - When editing files with Chinese text on Windows, verify no BOM and run `py_compile` plus the ARM unit tests.
