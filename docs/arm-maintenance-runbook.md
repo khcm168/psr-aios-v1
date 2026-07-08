@@ -29,6 +29,8 @@ The intended flow is:
 
 The data import is step 4. The `Collection!B1` update is useful, but it must not be treated as proof that the import failed if it has a credential problem after step 4 succeeds.
 
+The default Python WebApp POST timeout is 300 seconds. The full post-import handoff can run slightly over 120 seconds after the date AI operation-area rebuild is included, so a local `ReadTimeout` around 120 seconds can be a client timeout even when Apps Script completes and writes the final workflow LOG row.
+
 ## Daily Commands
 
 Standalone preflight doctor:
@@ -91,6 +93,7 @@ Required for import:
 ```text
 ARM_IMPORT_WEBAPP_URL=https://script.google.com/macros/s/<web-app-deployment-id>/exec
 ARM_WEBAPP_TOKEN=<same token as Apps Script ScriptProperties.ARM_WEBAPP_TOKEN>
+ARM_WEBAPP_POST_TIMEOUT_SECONDS=300
 ```
 
 Backward-compatible fallback:

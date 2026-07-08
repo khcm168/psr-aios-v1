@@ -31,6 +31,7 @@ ARM_ACCOUNT = os.getenv("ARM_ACCOUNT", "108010")
 ARM_PASSWORD = os.getenv("ARM_PASSWORD")
 ARM_IMPORT_WEBAPP_URL = os.getenv("ARM_IMPORT_WEBAPP_URL") or os.getenv("ARM_WEBAPP_URL")
 ARM_WEBAPP_TOKEN = os.getenv("ARM_WEBAPP_TOKEN")
+ARM_WEBAPP_POST_TIMEOUT_SECONDS = int(os.getenv("ARM_WEBAPP_POST_TIMEOUT_SECONDS", "300"))
 ARM_COLLECTION_SPREADSHEET_ID = (
     os.getenv("ARM_COLLECTION_SPREADSHEET_ID")
     or os.getenv("SPREADSHEET_ID")
@@ -471,13 +472,13 @@ def parse_arm_webapp_response(result: Any) -> dict[str, Any]:
 
 
 def post_rows_to_apps_script(rows: list[list[str]], run_post_import_workflow: bool = True) -> dict[str, Any]:
-    print("[STEP] Send rows to Apps Script")
+    print(f"[STEP] Send rows to Apps Script (timeout={ARM_WEBAPP_POST_TIMEOUT_SECONDS}s)")
     payload = build_arm_webapp_payload(rows, run_post_import_workflow=run_post_import_workflow)
     response = requests.post(
         ARM_IMPORT_WEBAPP_URL,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={"Content-Type": "application/json; charset=utf-8"},
-        timeout=120,
+        timeout=ARM_WEBAPP_POST_TIMEOUT_SECONDS,
     )
 
     print("[HTTP]", response.status_code)
