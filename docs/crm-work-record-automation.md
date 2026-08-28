@@ -8,12 +8,14 @@ The script opens the CRM in a visible browser, logs in, opens `工作記錄維�
 
 The current production flow is:
 
-1. Save one standalone test record for customer lookup key `中崙`.
-2. Load sheet tab `V` from `地區會議資料V7.0 beta`.
-3. Filter rows where column `H` matches the requested date.
-4. For each matching row, fill and save `來源代號`, `工作性質代號`, and `紀錄內容`.
+1. Load sheet tab `V` from `地區會議資料V7.0 beta`.
+2. Filter rows where column `H` matches the requested date.
+3. Skip rows that are already present in the local duplicate ledger.
+4. Validate required CRM fields before opening the save path.
+5. For each pending row, fill and save `來源代號`, `工作性質代號`, and `紀錄內容`.
+6. Write each row's final process status to column `V`.
 
-This command performs live CRM saves. Use `--skip-test-record` after the standalone test record has already been saved for the same run.
+This command performs live CRM saves. The default is official sheet-only operation: tab `V` is loaded, today's rows are printed as JSON, and the standalone `中崙` test record is skipped unless `--include-test-record` is passed.
 
 ## Environment
 
@@ -34,6 +36,21 @@ Default CRM input can be overridden with `--input-json`, `--company`, and `--cus
 | `O` | Customer/source lookup key | `來源代號` lookup |
 | `P` | Work nature text, starting with a code such as `39003` | `工作性質代號` lookup |
 | `T` | Work record note | `紀錄內容` textarea |
+| `V` | Per-row process status written by this automation | Operator audit only |
+
+The local duplicate ledger is:
+
+```text
+data/crm_work_record_trigger/crm_work_record_ledger.jsonl
+```
+
+If a row is already in that ledger, the script skips CRM save and writes a status like this to column `V`:
+
+```text
+2026-07-23 13:37:13 sent (duplicate ledger skipped) - Local ledger already contains this row; CRM save was not repeated.
+```
+
+If column `P` is blank, the script does not attempt CRM save. It writes `blocked - Missing column P work nature; CRM save was not attempted.` to column `V`.
 
 For `2026/5/26`, tab `V` returned these rows during the successful run:
 
@@ -64,22 +81,40 @@ Static check:
 .\.venv\Scripts\python.exe -m py_compile scripts\crm_work_record_lookup.py
 ```
 
-Live command for the full current workflow:
+Live command for the official sheet workflow. If `--date` is omitted, the script uses today in Asia/Taipei with sheet format `yyyy/m/d`.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\crm_work_record_lookup.py --browser edge --company TOP高峰藥品 --from-sheet-v --date 2026/5/26 --keep-open
+.\.venv\Scripts\python.exe scripts\crm_work_record_lookup.py --company TOP高峰藥品 --keep-open
 ```
 
-Continuation command after `中崙` has already been saved:
+Replay a specific date:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\crm_work_record_lookup.py --browser edge --company TOP高峰藥品 --from-sheet-v --date 2026/5/26 --skip-test-record --keep-open
+.\.venv\Scripts\python.exe scripts\crm_work_record_lookup.py --company TOP高峰藥品 --date 2026/5/26 --keep-open
+```
+
+Include the standalone `中崙` smoke-test before sheet rows:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\crm_work_record_lookup.py --company TOP高峰藥品 --include-test-record --keep-open
 ```
 
 Limit sheet processing during a live proof:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\crm_work_record_lookup.py --browser edge --company TOP高峰藥品 --from-sheet-v --date 2026/5/26 --skip-test-record --max-rows 1 --keep-open
+.\.venv\Scripts\python.exe scripts\crm_work_record_lookup.py --company TOP高峰藥品 --date 2026/5/26 --max-rows 1 --keep-open
+```
+
+Restart from a specific sheet row after correcting data:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\crm_work_record_lookup.py --company TOP高峰藥品 --date 2026/7/28 --start-row 24 --keep-open
+```
+
+Disable sheet loading for lookup/debug-only work:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\crm_work_record_lookup.py --company TOP高峰藥品 --no-from-sheet-v --include-test-record --keep-open
 ```
 
 ## Successful Run Evidence
@@ -101,10 +136,14 @@ After each save, the script accepted normal CRM alert prompts and waited for the
 
 ## File Sync
 
-The project lives under OneDrive:
+Older runs may have used a OneDrive checkout. The canonical working checkout
+for this repo is:
 
 ```text
-C:\Users\khcm1\OneDrive\Desktop\Projects\psr-aios-v1
+C:\Dev\psr-aios-v1
 ```
 
-Before committing or handing off, confirm OneDrive has finished syncing `scripts/crm_work_record_lookup.py` and this runbook. The repo's operation-log helper can report local OneDrive path context for produced files, but the CRM automation itself does not write a sheet log row.
+Before committing or handing off, confirm the active checkout path and git
+status. The repo's operation-log helper can report local OneDrive path context
+for produced files when applicable, but the CRM automation itself does not
+write a sheet log row.

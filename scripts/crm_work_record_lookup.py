@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import socket
 import sys
 import time
 from dataclasses import dataclass
@@ -28,6 +30,17 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select, WebDriverWait
 
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app.window_layout import (
+    CRM_TWINPLAY_BROWSER_ZOOM_PERCENT,
+    half_screen_rect,
+    send_crm_twinplay_browser_zoom_to_window,
+)
+
+OUTPUT_DIR = ROOT / "data" / "crm_work_record_trigger"
 DEFAULT_INPUT = {
     "crmUrl": "http://192.168.0.250/WebCRM/src/_Common/AppUtil/FrameSet/Newlogin.aspx",
     "account": "108010",
@@ -37,8 +50,11 @@ DEFAULT_INPUT = {
     "resultSelection": "first",
 }
 
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
 DEFAULT_TEST_WORK_NATURE = "39003　　新資料提供"
+DEFAULT_STATUS_COLUMN = "V"
+DEFAULT_LEDGER_PATH = OUTPUT_DIR / "crm_work_record_ledger.jsonl"
 
 
 @dataclass(frozen=True)
@@ -56,6 +72,9 @@ class RunConfig:
     sheet_tab: str
     skip_test_record: bool
     max_rows: int
+    start_row: int
+    status_column: str
+    ledger_path: Path
 
 
 @dataclass(frozen=True)
@@ -92,21 +111,49 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--browser", choices=["chrome", "edge"], default="edge")
     parser.add_argument(
         "--from-sheet-v",
+        dest="from_sheet_v",
         action="store_true",
-        help="After the test record, load rows from the configured workbook sheet V.",
+        default=True,
+        help="Load rows from the configured workbook sheet V. This is the default.",
+    )
+    parser.add_argument(
+        "--no-from-sheet-v",
+        dest="from_sheet_v",
+        action="store_false",
+        help="Do not load sheet V; useful for lookup/debug-only runs.",
     )
     parser.add_argument(
         "--date",
         default=None,
-        help="Sheet date filter for column H. Defaults to today in Asia/Taipei, e.g. 2026/5/26.",
+        help="Sheet date filter for column H. Defaults to today in Asia/Taipei as yyyy/m/d, e.g. 2026/5/29.",
     )
     parser.add_argument("--sheet-tab", default="V", help="Source sheet tab. Default: V.")
+    parser.add_argument("--start-row", type=int, default=0, help="Only load sheet rows at or after this row.")
     parser.add_argument(
         "--skip-test-record",
+        dest="skip_test_record",
         action="store_true",
-        help="Skip the standalone customerName test record and only process sheet rows.",
+        default=True,
+        help="Skip the standalone customerName test record and only process sheet rows. This is the default.",
+    )
+    parser.add_argument(
+        "--include-test-record",
+        dest="skip_test_record",
+        action="store_false",
+        help="Also save the standalone customerName test record before sheet rows.",
     )
     parser.add_argument("--max-rows", type=int, default=0, help="Limit sheet rows. 0 means all matches.")
+    parser.add_argument(
+        "--status-column",
+        default=DEFAULT_STATUS_COLUMN,
+        help="Sheet column used for per-row process status. Default: V.",
+    )
+    parser.add_argument(
+        "--ledger-path",
+        type=Path,
+        default=DEFAULT_LEDGER_PATH,
+        help="Local JSONL ledger path used to avoid duplicate CRM saves.",
+    )
     parser.add_argument(
         "--keep-open",
         action="store_true",
@@ -135,6 +182,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def normalize_column_letter(value: str) -> str:
+    text = str(value or "").strip().upper()
+    if not re.fullmatch(r"[A-Z]+", text):
+        raise argparse.ArgumentTypeError(f"Invalid column letter: {value!r}")
+    return text
+
+
 def load_config(args: argparse.Namespace) -> RunConfig:
     payload = dict(DEFAULT_INPUT)
     if args.input_json:
@@ -159,6 +213,9 @@ def load_config(args: argparse.Namespace) -> RunConfig:
         sheet_tab=args.sheet_tab,
         skip_test_record=args.skip_test_record,
         max_rows=args.max_rows,
+        start_row=max(0, args.start_row),
+        status_column=normalize_column_letter(args.status_column),
+        ledger_path=args.ledger_path,
     )
 
 
@@ -182,12 +239,27 @@ def normalize_date_text(value: str) -> str:
 def build_driver(config: RunConfig) -> WebDriver:
     if config.browser == "edge":
         options = webdriver.EdgeOptions()
-        options.add_argument("--start-maximized")
-        return webdriver.Edge(options=options)
+        driver = webdriver.Edge(options=options)
+    else:
+        options = webdriver.ChromeOptions()
+        driver = webdriver.Chrome(options=options)
 
-    options = webdriver.ChromeOptions()
-    options.add_argument("--start-maximized")
-    return webdriver.Chrome(options=options)
+    place_driver_window(driver)
+    return driver
+
+
+def place_driver_window(driver: WebDriver) -> None:
+    rect = half_screen_rect("crm")
+    driver.set_window_rect(rect.x, rect.y, rect.width, rect.height)
+
+
+def apply_twinplay_browser_zoom(driver: WebDriver) -> None:
+    place_driver_window(driver)
+    if send_crm_twinplay_browser_zoom_to_window(driver.title or "CRM"):
+        safe_print(f"[OK] CRM twinplay browser zoom set to {CRM_TWINPLAY_BROWSER_ZOOM_PERCENT:.1f}%")
+    else:
+        safe_print("[WARN] CRM twinplay browser zoom target was not found; browser remains at current zoom.")
+    place_driver_window(driver)
 
 
 def wait(driver: WebDriver, seconds: int = 20) -> WebDriverWait:
@@ -220,9 +292,12 @@ def switch_to_work_frame(driver: WebDriver) -> None:
 
 def login(driver: WebDriver, config: RunConfig) -> None:
     safe_print("[STEP] Open CRM login page")
+    place_driver_window(driver)
     driver.get(config.crm_url)
+    place_driver_window(driver)
 
     if "TreeMainFrame.aspx" in driver.current_url:
+        place_driver_window(driver)
         safe_print("[OK] Already logged in")
         return
 
@@ -243,16 +318,19 @@ def login(driver: WebDriver, config: RunConfig) -> None:
     driver.find_element(By.ID, "ImageButton1").click()
 
     wait(driver, 30).until(lambda d: "TreeMainFrame.aspx" in d.current_url)
+    place_driver_window(driver)
     safe_print("[OK] Logged in")
 
 
 def open_work_record_maintenance(driver: WebDriver) -> None:
+    place_driver_window(driver)
     safe_print("[STEP] Open 工作記錄維護")
     switch_to_frame(driver, By.NAME, "banner")
     wait(driver, 20).until(EC.element_to_be_clickable((By.ID, "Btn_1"))).click()
 
     switch_to_work_frame(driver)
     wait(driver, 20).until(lambda d: "工作記錄維護作業" in d.find_element(By.TAG_NAME, "body").text)
+    place_driver_window(driver)
     safe_print("[OK] 工作記錄維護 is open")
 
 
@@ -644,7 +722,61 @@ def required_env(*names: str) -> str:
     raise RuntimeError(f"Missing required environment variable: {' or '.join(names)}")
 
 
-def get_sheet_values(spreadsheet_id: str, range_name: str) -> list[list[str]]:
+def load_dotenv_files() -> None:
+    try:
+        from dotenv import load_dotenv
+    except Exception:
+        return
+
+    candidates = [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parents[1] / ".env",
+    ]
+    seen: set[Path] = set()
+    for dotenv_path in candidates:
+        if dotenv_path in seen:
+            continue
+        seen.add(dotenv_path)
+        load_dotenv(dotenv_path)
+
+
+def is_retryable_google_error(exc: Exception) -> bool:
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+
+    try:
+        from googleapiclient.errors import HttpError
+    except Exception:
+        HttpError = None
+
+    if HttpError is not None and isinstance(exc, HttpError):
+        status = getattr(getattr(exc, "resp", None), "status", None)
+        return status in RETRYABLE_HTTP_STATUSES
+
+    text = str(exc).lower()
+    return "timed out" in text or "timeout" in text
+
+
+def execute_google_request(build_request: Any, label: str, attempts: int = 4) -> Any:
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return build_request().execute(num_retries=3)
+        except Exception as exc:
+            last_error = exc
+            if attempt >= attempts or not is_retryable_google_error(exc):
+                break
+            wait_seconds = min(30, attempt * 5)
+            safe_print(
+                f"[WARN] Google Sheets {label} timed out on attempt {attempt}; "
+                f"retrying in {wait_seconds}s: {exc}"
+            )
+            time.sleep(wait_seconds)
+
+    raise RuntimeError(f"Google Sheets {label} failed after {attempts} attempt(s): {last_error}") from last_error
+
+
+def get_sheets_service() -> Any:
     from google.oauth2.service_account import Credentials
     from googleapiclient.discovery import build
 
@@ -652,32 +784,212 @@ def get_sheet_values(spreadsheet_id: str, range_name: str) -> list[list[str]]:
         required_env("SERVICE_ACCOUNT_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
         scopes=SCOPES,
     )
-    service = build("sheets", "v4", credentials=credentials)
-    result = service.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id,
-        range=range_name,
-        valueRenderOption="FORMATTED_VALUE",
-    ).execute()
+    return build("sheets", "v4", credentials=credentials)
+
+
+def sheet_range(sheet_name: str, a1_range: str) -> str:
+    escaped = sheet_name.replace("'", "''")
+    return f"'{escaped}'!{a1_range}"
+
+
+def get_sheet_values(spreadsheet_id: str, range_name: str, service: Any | None = None) -> list[list[str]]:
+    service = service or get_sheets_service()
+    result = execute_google_request(
+        lambda: service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=range_name,
+            valueRenderOption="FORMATTED_VALUE",
+        ),
+        f"read {range_name}",
+    )
     return result.get("values", [])
 
 
-def load_sheet_v_records(config: RunConfig) -> list[WorkRecord]:
-    try:
-        from dotenv import load_dotenv
+def update_sheet_values(
+    spreadsheet_id: str,
+    range_name: str,
+    values: list[list[str]],
+    service: Any | None = None,
+) -> None:
+    service = service or get_sheets_service()
+    execute_google_request(
+        lambda: service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=range_name,
+            valueInputOption="USER_ENTERED",
+            body={"values": values},
+        ),
+        f"update {range_name}",
+    )
 
-        load_dotenv(Path.cwd() / ".env")
-    except Exception:
-        pass
 
-    spreadsheet_id = required_env("N1_SOURCE_SPREADSHEET_ID", "SPREADSHEET_ID")
+def taipei_timestamp() -> str:
+    return datetime.now(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def row_status_message(status: str, detail: str, *, timestamp: str | None = None) -> str:
+    detail_text = str(detail or "").strip()
+    suffix = f" - {detail_text}" if detail_text else ""
+    return f"{timestamp or taipei_timestamp()} {status}{suffix}"
+
+
+def status_cell_range(config: RunConfig, record: WorkRecord) -> str:
+    if record.sheet_row is None:
+        raise RuntimeError("Cannot write sheet status for a record without sheet_row.")
+    return sheet_range(config.sheet_tab, f"{config.status_column}{record.sheet_row}")
+
+
+def write_row_status(
+    service: Any,
+    spreadsheet_id: str,
+    config: RunConfig,
+    record: WorkRecord,
+    status: str,
+    detail: str,
+) -> str:
+    message = row_status_message(status, detail)
+    range_name = status_cell_range(config, record)
+    safe_print(f"[WRITE] {range_name} (1 row x 1 col): {message}")
+    update_sheet_values(spreadsheet_id, range_name, [[message]], service=service)
+    return message
+
+
+def normalize_ledger_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def record_content_hash(record: WorkRecord) -> str:
+    payload = "\n".join(
+        [
+            normalize_ledger_text(record.source_lookup_key),
+            normalize_ledger_text(record.work_nature),
+            normalize_ledger_text(record.record_content),
+        ]
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def ledger_key(spreadsheet_id: str, config: RunConfig, record: WorkRecord) -> str:
+    return "|".join(
+        [
+            spreadsheet_id,
+            config.sheet_tab,
+            normalize_date_text(config.sheet_date),
+            f"row:{record.sheet_row}",
+        ]
+    )
+
+
+def load_local_ledger(path: Path) -> dict[str, dict[str, Any]]:
+    entries: dict[str, dict[str, Any]] = {}
+    if not path.exists():
+        return entries
+    with path.open("r", encoding="utf-8") as fh:
+        for line_number, line in enumerate(fh, start=1):
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                entry = json.loads(text)
+            except json.JSONDecodeError:
+                safe_print(f"[WARN] Skip invalid ledger line {line_number}: {path}")
+                continue
+            key = str(entry.get("key") or "")
+            if key:
+                entries[key] = entry
+    return entries
+
+
+def build_ledger_entry(spreadsheet_id: str, config: RunConfig, record: WorkRecord) -> dict[str, Any]:
+    return {
+        "key": ledger_key(spreadsheet_id, config, record),
+        "sent_at": taipei_timestamp(),
+        "spreadsheet_id": spreadsheet_id,
+        "sheet_tab": config.sheet_tab,
+        "sheet_date": normalize_date_text(config.sheet_date),
+        "sheet_row": record.sheet_row,
+        "source_lookup_key": record.source_lookup_key,
+        "work_nature": record.work_nature,
+        "record_hash": record_content_hash(record),
+    }
+
+
+def append_local_ledger(path: Path, entry: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def validation_error(record: WorkRecord) -> str | None:
+    if not normalize_ledger_text(record.work_nature):
+        return "Missing column P work nature; CRM save was not attempted."
+    return None
+
+
+def prepare_sheet_records_for_crm(
+    service: Any,
+    spreadsheet_id: str,
+    config: RunConfig,
+    records: list[WorkRecord],
+    ledger: dict[str, dict[str, Any]],
+) -> list[WorkRecord]:
+    pending: list[WorkRecord] = []
+    for record in records:
+        key = ledger_key(spreadsheet_id, config, record)
+        if key in ledger:
+            write_row_status(
+                service,
+                spreadsheet_id,
+                config,
+                record,
+                "sent (duplicate ledger skipped)",
+                "Local ledger already contains this row; CRM save was not repeated.",
+            )
+            safe_print(f"[SKIP] Sheet row {record.sheet_row}: local ledger already contains this row")
+            continue
+
+        reason = validation_error(record)
+        if reason:
+            write_row_status(service, spreadsheet_id, config, record, "blocked", reason)
+            safe_print(f"[SKIP] Sheet row {record.sheet_row}: {reason}")
+            continue
+
+        pending.append(record)
+    return pending
+
+
+def mark_record_sent(
+    service: Any,
+    spreadsheet_id: str,
+    config: RunConfig,
+    ledger: dict[str, dict[str, Any]],
+    record: WorkRecord,
+) -> None:
+    entry = build_ledger_entry(spreadsheet_id, config, record)
+    append_local_ledger(config.ledger_path, entry)
+    ledger[entry["key"]] = entry
+    write_row_status(service, spreadsheet_id, config, record, "sent", "CRM save completed.")
+
+
+def load_sheet_v_records(
+    config: RunConfig,
+    *,
+    service: Any | None = None,
+    spreadsheet_id: str | None = None,
+) -> list[WorkRecord]:
+    load_dotenv_files()
+
+    spreadsheet_id = spreadsheet_id or required_env("N1_SOURCE_SPREADSHEET_ID", "SPREADSHEET_ID")
     target_date = normalize_date_text(config.sheet_date)
-    values = get_sheet_values(spreadsheet_id, f"'{config.sheet_tab}'!A:T")
+    values = get_sheet_values(spreadsheet_id, sheet_range(config.sheet_tab, "A:T"), service=service)
     records: list[WorkRecord] = []
 
     def cell(row: list[str], index_1_based: int) -> str:
         return str(row[index_1_based - 1]).strip() if len(row) >= index_1_based else ""
 
     for row_number, row in enumerate(values, start=1):
+        if config.start_row and row_number < config.start_row:
+            continue
         row_date = normalize_date_text(cell(row, 8))
         if row_date != target_date:
             continue
@@ -707,10 +1019,36 @@ def load_sheet_v_records(config: RunConfig) -> list[WorkRecord]:
 
 
 def run(config: RunConfig) -> None:
+    sheet_records: list[WorkRecord] = []
+    pending_records: list[WorkRecord] = []
+    service: Any | None = None
+    spreadsheet_id = ""
+    ledger: dict[str, dict[str, Any]] = {}
+    if config.from_sheet_v and not (getattr(config, "debug_controls", False) or getattr(config, "debug_dialog", False)):
+        load_dotenv_files()
+        spreadsheet_id = required_env("N1_SOURCE_SPREADSHEET_ID", "SPREADSHEET_ID")
+        service = get_sheets_service()
+        sheet_records = load_sheet_v_records(config, service=service, spreadsheet_id=spreadsheet_id)
+        if not sheet_records and config.skip_test_record:
+            safe_print("[DONE] No sheet rows matched; no CRM record was created.")
+            return
+        ledger = load_local_ledger(config.ledger_path)
+        pending_records = prepare_sheet_records_for_crm(
+            service,
+            spreadsheet_id,
+            config,
+            sheet_records,
+            ledger,
+        )
+        if not pending_records and config.skip_test_record:
+            safe_print("[DONE] No pending sheet rows need CRM save.")
+            return
+
     driver = build_driver(config)
     try:
         login(driver, config)
         open_work_record_maintenance(driver)
+        apply_twinplay_browser_zoom(driver)
         ensure_new_record(driver)
         if getattr(config, "debug_controls", False):
             dump_visible_work_controls(driver)
@@ -731,10 +1069,16 @@ def run(config: RunConfig) -> None:
             save_current_record(driver, test_record)
 
         if config.from_sheet_v:
-            records = load_sheet_v_records(config)
-            for record in records:
-                fill_work_record(driver, record)
-                save_current_record(driver, record)
+            for record in pending_records:
+                assert service is not None
+                write_row_status(service, spreadsheet_id, config, record, "processing", "CRM save started.")
+                try:
+                    fill_work_record(driver, record)
+                    save_current_record(driver, record)
+                except Exception as exc:
+                    write_row_status(service, spreadsheet_id, config, record, "error", str(exc))
+                    raise
+                mark_record_sent(service, spreadsheet_id, config, ledger, record)
 
         safe_print("[DONE] Automation complete.")
         if config.keep_open:
